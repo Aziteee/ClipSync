@@ -1,0 +1,19 @@
+# Rust
+target/
+clipsync-pc/target/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Android daemon build
+clipsync-daemon/build/
+
+# Superpowers SDD workspace (generated task briefs, reports, review packages)
+.superpowers/
