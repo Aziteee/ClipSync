@@ -1,11 +1,14 @@
 #include "binder_clip.h"
-#include <android/binder_manager.h>
 #include <android/binder_ibinder.h>
 #include <android/binder_parcel.h>
 #include <android/binder_status.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <dlfcn.h>
+
+/* Runtime-resolved: linked from system libbinder_ndk.so */
+static AIBinder* (*p_AServiceManager_getService)(const char* instance) = NULL;
 
 /* Transaction codes (from AIDL) */
 #define TRANSACTION_GET_PRIMARY_CLIP           1
@@ -42,8 +45,21 @@ static binder_status_t on_transact(
 }
 
 int binder_clip_init(void) {
+    /* Resolve AServiceManager_getService at runtime (NDK stub doesn't export it) */
+    void *handle = dlopen("libbinder_ndk.so", RTLD_NOW);
+    if (!handle) {
+        fprintf(stderr, "[binder_clip] failed to dlopen libbinder_ndk.so: %s\n", dlerror());
+        return -1;
+    }
+    p_AServiceManager_getService = (AIBinder*(*)(const char*))dlsym(handle, "AServiceManager_getService");
+    if (!p_AServiceManager_getService) {
+        fprintf(stderr, "[binder_clip] AServiceManager_getService not found: %s\n", dlerror());
+        dlclose(handle);
+        return -1;
+    }
+
     /* Get the clipboard service */
-    g_clipboard_svc = AServiceManager_getService("clipboard");
+    g_clipboard_svc = p_AServiceManager_getService("clipboard");
     if (!g_clipboard_svc) {
         fprintf(stderr, "[binder_clip] failed to get clipboard service\n");
         return -1;
@@ -79,7 +95,7 @@ int binder_clip_init(void) {
     binder_status_t status = AIBinder_transact(
         g_clipboard_svc,
         TRANSACTION_ADD_PRIMARY_CLIP_CHANGED_LISTENER,
-        data,
+        &data,
         NULL,
         FLAG_ONEWAY
     );
@@ -94,6 +110,15 @@ int binder_clip_init(void) {
     return 0;
 }
 
+static bool string_alloc(void *cookie, int32_t len, char **buf) {
+    if (len <= 0) return false;
+    char *s = (char *)malloc((size_t)len);
+    if (!s) return false;
+    *buf = s;
+    *(char **)cookie = s;
+    return true;
+}
+
 char *binder_clip_get_text(void) {
     /* transact getPrimaryClip */
     AParcel *data = AParcel_create();
@@ -105,19 +130,19 @@ char *binder_clip_get_text(void) {
     binder_status_t status = AIBinder_transact(
         g_clipboard_svc,
         TRANSACTION_GET_PRIMARY_CLIP,
-        data,
-        reply,
+        &data,
+        &reply,
         0
     );
 
     char *result = NULL;
     if (status == STATUS_OK) {
         AParcel_readInt32(reply, NULL); /* read ClipboardData presence flag */
-        const char *text = NULL;
-        int32_t len = 0;
-        AParcel_readString(reply, &text, &len);
-        if (text && len > 0) {
+        char *text = NULL;
+        AParcel_readString(reply, &text, string_alloc);
+        if (text) {
             result = strdup(text);
+            free(text);
         }
     }
 
@@ -138,7 +163,7 @@ int binder_clip_set_text(const char *text) {
     binder_status_t status = AIBinder_transact(
         g_clipboard_svc,
         TRANSACTION_SET_PRIMARY_CLIP,
-        data,
+        &data,
         NULL,
         FLAG_ONEWAY
     );
