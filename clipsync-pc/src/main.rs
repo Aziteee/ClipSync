@@ -1,4 +1,5 @@
 mod config;
+mod clip;
 mod protocol;
 
 use config::ClipSyncConfig;
