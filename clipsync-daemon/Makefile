@@ -1,5 +1,4 @@
 CC ?= aarch64-linux-android33-clang
-NDK_SYSROOT ?= $(NDK_HOME)/toolchains/llvm/prebuilt/windows-x86_64/sysroot
 CFLAGS = -Wall -Wextra -O2
 LDFLAGS = -lbinder_ndk -ldl
 TARGET = clipsyncd
