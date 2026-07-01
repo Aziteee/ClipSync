@@ -160,34 +160,58 @@ int main(void) {
     AIBinder_Class *cls = AIBinder_Class_define("android.content.IClipboard",
         proxy_onCreate, proxy_onDestroy, proxy_onTransact);
     if (!cls) { fprintf(stderr, "Class_define fail\n"); return 1; }
-    AIBinder_associateClass(svc, cls);
-    printf("Ready\n");
+    AIBinder_Class_disableInterfaceTokenHeader(cls);
+    if (!AIBinder_associateClass(svc, cls)) { fprintf(stderr, "associateClass fail\n"); return 1; }
+    printf("Ready (no header)\n\n");
 
-    /* Read current clipboard */
-    char *text = get_clipboard_text(svc);
-    if (text) { printf("Current clipboard: [%s]\n", text); free(text); }
-    else { printf("No clipboard text\n"); }
+    /* Write: verify by long-pressing in any text field on phone */
+    const char *test_text = "Hello from ClipSync Binder! 你好世界";
+    printf("Writing: '%s'\n", test_text);
 
-    /* Write text */
-    printf("Writing 'Hello from ClipSync Binder!'...\n");
     AParcel *wdata = NULL;
     AIBinder_prepareTransaction(svc, &wdata);
-    AParcel_writeString(wdata, "clipsync", 8);      /* callingPackage */
-    AParcel_writeInt32(wdata, 0);                    /* userId */
-    AParcel_writeInt32(wdata, 0);                    /* deviceId */
-    write_clip_data_plain_text(wdata, "ClipSync", "Hello from ClipSync Binder!");  /* ClipData */
-    AParcel_writeString(wdata, "", 0);               /* attributionTag */
+    write_clip_data_plain_text(wdata, "ClipSync", test_text);  /* ClipData FIRST */
+    AParcel_writeString(wdata, "com.android.shell", 18);        /* callingPackage */
+    AParcel_writeString(wdata, NULL, 0);                        /* attributionTag (null) */
+    AParcel_writeInt32(wdata, 0);                               /* userId */
+    AParcel_writeInt32(wdata, 0);                               /* deviceId */
 
     AParcel *wr = NULL;
-    binder_status_t ws = AIBinder_transact(svc, TRANSACTION_SET_PRIMARY_CLIP, &wdata, &wr, FLAG_ONEWAY);
-    printf("Write status: %d\n", ws);
+    binder_status_t ws = AIBinder_transact(svc, TRANSACTION_SET_PRIMARY_CLIP, &wdata, &wr, 0 /* no ONEWAY */);
+    printf("Write status: %d %s\n", ws, ws == STATUS_OK ? "OK" : "FAIL");
     if (wdata) AParcel_delete(wdata);
     if (wr) AParcel_delete(wr);
 
     /* Read back */
-    text = get_clipboard_text(svc);
-    if (text) { printf("Read back: [%s]\n", text); free(text); }
-    else { printf("Read back failed\n"); }
+    AParcel *rdata = NULL;
+    AIBinder_prepareTransaction(svc, &rdata);
+    AParcel_writeString(rdata, "com.android.shell", 18);
+    AParcel_writeString(rdata, "", 0);    /* attributionTag — REQUIRED on Android 12+ */
+    AParcel_writeInt32(rdata, 0);
+    AParcel_writeInt32(rdata, 0);
 
+    AParcel *rreply = NULL;
+    ws = AIBinder_transact(svc, TRANSACTION_GET_PRIMARY_CLIP, &rdata, &rreply, 0);
+    printf("Read status: %d %s\n", ws, ws == STATUS_OK ? "OK" : "FAIL");
+
+    if (ws == STATUS_OK && rreply) {
+        /* AIDL getPrimaryClip: hasResult(int) + ClipData if present */
+        int32_t hasResult = 0;
+        AParcel_readInt32(rreply, &hasResult);
+        printf("Has result: %d\n", hasResult);
+
+        if (hasResult == 1) {
+            char *txt = read_clip_data_text(rreply);
+            if (txt) { printf("Text: [%s]\n", txt); free(txt); }
+            else { printf("Failed to parse ClipData\n"); }
+        } else {
+            printf("Clipboard empty or error (code=%d)\n", hasResult);
+        }
+    }
+
+    if (rdata) AParcel_delete(rdata);
+    if (rreply) AParcel_delete(rreply);
+
+    printf("\nNow try pasting on phone...\n");
     return 0;
 }
