@@ -23,6 +23,24 @@ static AIBinder *g_listener = NULL;
 static clip_change_cb g_callback = NULL;
 
 static void *g_clip_listener_class = NULL;
+static void *g_clipboard_proxy_class = NULL;
+
+static void* proxy_onCreate(void *args) { (void)args; return (void*)0x1; }
+static void proxy_onDestroy(void *userData) { (void)userData; }
+static binder_status_t proxy_onTransact(AIBinder *binder, transaction_code_t code,
+    const AParcel *in, AParcel *out) {
+    (void)binder; (void)code; (void)in; (void)out;
+    return STATUS_OK;
+}
+
+static void* listener_onCreate(void *args) {
+    (void)args;
+    return (void*)0x1; /* dummy non-null user data */
+}
+
+static void listener_onDestroy(void *userData) {
+    (void)userData;
+}
 
 static binder_status_t on_transact(
     AIBinder *binder,
@@ -69,12 +87,29 @@ int binder_clip_init(void) {
     }
     printf("[binder_clip] getService clipboard OK\n");
 
+    /* Associate proxy class so AIBinder_prepareTransaction works */
+    g_clipboard_proxy_class = (void*)AIBinder_Class_define(
+        "android.content.IClipboard",
+        proxy_onCreate,
+        proxy_onDestroy,
+        proxy_onTransact
+    );
+    if (!g_clipboard_proxy_class) {
+        fprintf(stderr, "[binder_clip] failed to define clipboard proxy class\n");
+        return -1;
+    }
+    if (!AIBinder_associateClass(g_clipboard_svc, (AIBinder_Class*)g_clipboard_proxy_class)) {
+        fprintf(stderr, "[binder_clip] failed to associate clipboard class\n");
+        return -1;
+    }
+    printf("[binder_clip] clipboard proxy class associated\n");
+
     /* Create listener class */
     printf("[binder_clip] calling AIBinder_Class_define...\n");
     g_clip_listener_class = (void*)AIBinder_Class_define(
         "IOnPrimaryClipChangedListener",
-        NULL,       /* onCreate */
-        NULL,       /* onDestroy */
+        listener_onCreate,
+        listener_onDestroy,
         on_transact
     );
     printf("[binder_clip] AIBinder_Class_define returned %p\n", g_clip_listener_class);
@@ -93,21 +128,28 @@ int binder_clip_init(void) {
     }
 
     /* Register listener: addPrimaryClipChangedListener */
-    AParcel *data = AParcel_create();
+    AParcel *data = NULL;
+    binder_status_t status = AIBinder_prepareTransaction(g_clipboard_svc, &data);
+    if (status != STATUS_OK) {
+        fprintf(stderr, "[binder_clip] prepareTransaction failed: %d\n", status);
+        return -1;
+    }
     AParcel_writeStrongBinder(data, g_listener);
     AParcel_writeString(data, "clipsync", 8);
     AParcel_writeString(data, "", 0);
     AParcel_writeInt32(data, 0); /* userId */
     AParcel_writeInt32(data, 0); /* deviceId */
 
-    binder_status_t status = AIBinder_transact(
+    AParcel *reply = NULL;
+    status = AIBinder_transact(
         g_clipboard_svc,
         TRANSACTION_ADD_PRIMARY_CLIP_CHANGED_LISTENER,
         &data,
-        NULL,
+        &reply,
         FLAG_ONEWAY
     );
-    AParcel_delete(data);
+    if (data) AParcel_delete(data);
+    if (reply) AParcel_delete(reply);
 
     if (status != STATUS_OK) {
         fprintf(stderr, "[binder_clip] register listener failed: %d\n", status);
@@ -168,15 +210,17 @@ int binder_clip_set_text(const char *text) {
     AParcel_writeString(data, text, (int32_t)strlen(text));
     AParcel_writeString(data, "", 0);         /* attributionTag */
 
+    AParcel *reply = NULL;
     binder_status_t status = AIBinder_transact(
         g_clipboard_svc,
         TRANSACTION_SET_PRIMARY_CLIP,
         &data,
-        NULL,
+        &reply,
         FLAG_ONEWAY
     );
 
     AParcel_delete(data);
+    if (reply) AParcel_delete(reply);
     return (status == STATUS_OK) ? 0 : -1;
 }
 
