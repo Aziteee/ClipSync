@@ -51,12 +51,15 @@ int binder_clip_init(void) {
         fprintf(stderr, "[binder_clip] failed to dlopen libbinder_ndk.so: %s\n", dlerror());
         return -1;
     }
+    printf("[binder_clip] dlopen OK\n");
+
     p_AServiceManager_getService = (AIBinder*(*)(const char*))dlsym(handle, "AServiceManager_getService");
     if (!p_AServiceManager_getService) {
         fprintf(stderr, "[binder_clip] AServiceManager_getService not found: %s\n", dlerror());
         dlclose(handle);
         return -1;
     }
+    printf("[binder_clip] dlsym OK\n");
 
     /* Get the clipboard service */
     g_clipboard_svc = p_AServiceManager_getService("clipboard");
@@ -64,17 +67,22 @@ int binder_clip_init(void) {
         fprintf(stderr, "[binder_clip] failed to get clipboard service\n");
         return -1;
     }
+    printf("[binder_clip] getService clipboard OK\n");
 
     /* Create listener class */
+    printf("[binder_clip] calling AIBinder_Class_define...\n");
     g_clip_listener_class = (void*)AIBinder_Class_define(
         "IOnPrimaryClipChangedListener",
         NULL,       /* onCreate */
         NULL,       /* onDestroy */
         on_transact
     );
+    printf("[binder_clip] AIBinder_Class_define returned %p\n", g_clip_listener_class);
     if (!g_clip_listener_class) {
-        fprintf(stderr, "[binder_clip] failed to define listener class\n");
-        return -1;
+        fprintf(stderr, "[binder_clip] WARNING: failed to define listener class (will retry later)\n");
+        /* Don't fail — read/write still works without the listener */
+        printf("[binder_clip] initialized (read/write only, no listener)\n");
+        return 0;
     }
 
     /* Create listener instance */

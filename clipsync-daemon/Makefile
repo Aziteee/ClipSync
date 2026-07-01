@@ -6,10 +6,10 @@ TARGET = $(BUILD_DIR)/clipsyncd
 SRCS = clipsyncd.c binder_clip.c ws_server.c mdns_publish.c
 OBJS = $(SRCS:%.c=$(BUILD_DIR)/%.o)
 
-all: $(TARGET)
+all: $(TARGET) $(BUILD_DIR)/test_clip
 
 $(BUILD_DIR):
-	mkdir -p $(BUILD_DIR)
+	@if not exist $(BUILD_DIR) mkdir $(BUILD_DIR)
 
 $(TARGET): $(OBJS) protocol.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $(OBJS) $(LDFLAGS)
@@ -33,4 +33,11 @@ module: $(TARGET)
 	cd module && zip -r ../clipsync-module.zip .
 	@echo "Module package: clipsync-module.zip"
 
-.PHONY: all clean install module
+.PHONY: all clean install module test
+
+test: $(BUILD_DIR)/test_clip
+	adb push $(BUILD_DIR)/test_clip /data/local/tmp/
+	adb shell su -c "chmod 755 /data/local/tmp/test_clip && /data/local/tmp/test_clip"
+
+$(BUILD_DIR)/test_clip: test_clip.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
