@@ -1,0 +1,32 @@
+[package]
+name = "clipsync-pc"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+futures-util = "0.3"
+mdns-sd = "0.14"
+tray-icon = "0.19"
+winit = "0.30"
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+blake3 = "1"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+url = "2"
+windows = { version = "0.58", features = [
+    "Win32_System_DataExchange",
+    "Win32_System_Ole",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Threading",
+    "Win32_Foundation",
+    "Win32_System_Memory",
+]}
+anyhow = "1"
+thiserror = "2"
+log = "0.4"
+env_logger = "0.11"
