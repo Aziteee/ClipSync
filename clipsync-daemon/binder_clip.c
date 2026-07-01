@@ -160,6 +160,8 @@ int binder_clip_init(void) {
     return 0;
 }
 
+/* --- ClipData parcel helpers --- */
+
 static bool string_alloc(void *cookie, int32_t len, char **buf) {
     if (len <= 0) return false;
     char *s = (char *)malloc((size_t)len);
@@ -169,57 +171,137 @@ static bool string_alloc(void *cookie, int32_t len, char **buf) {
     return true;
 }
 
-char *binder_clip_get_text(void) {
-    /* transact getPrimaryClip */
-    AParcel *data = AParcel_create();
-    AParcel_writeString(data, "clipsync", 8); /* callingPackage */
-    AParcel_writeInt32(data, 0);              /* userId */
-    AParcel_writeInt32(data, 0);              /* deviceId */
+/* Write minimal ClipData for plain text: ClipDescription + 1 text Item */
+static void write_clip_plain_text(AParcel *dest, const char *label, const char *text) {
+    /* ClipDescription */
+    AParcel_writeString(dest, label, (int32_t)strlen(label)); /* mLabel */
+    AParcel_writeInt32(dest, 1);                              /* mMimeTypes count = 1 */
+    AParcel_writeString(dest, "text/plain", 10);              /* mMimeTypes[0] */
+    AParcel_writeInt64(dest, 0LL);                            /* mTimeStamp */
+    AParcel_writeInt32(dest, 0);                              /* isStyledText */
+    /* mIcon = null */
+    AParcel_writeInt32(dest, 0);
+    /* mItems count = 1 */
+    AParcel_writeInt32(dest, 1);
+    /* Item[0] */
+    if (text && text[0]) {
+        AParcel_writeInt32(dest, 1);                          /* hasText=1 */
+        AParcel_writeString(dest, text, (int32_t)strlen(text));
+    } else {
+        AParcel_writeInt32(dest, 0);                          /* hasText=0 */
+    }
+    AParcel_writeString(dest, NULL, 0);                       /* htmlText (null) */
+    AParcel_writeInt32(dest, 0);                              /* hasIntent=0 */
+    /* hasIntentSender — API 35+ field, write 0 */
+    AParcel_writeInt32(dest, 0);
+    AParcel_writeInt32(dest, 0);                              /* hasUri=0 */
+    AParcel_writeInt32(dest, 0);                              /* hasActivityInfo=0 */
+}
 
-    AParcel *reply = AParcel_create();
-    binder_status_t status = AIBinder_transact(
-        g_clipboard_svc,
-        TRANSACTION_GET_PRIMARY_CLIP,
-        &data,
-        &reply,
-        0
-    );
+/* Read ClipData from parcel, extract text from first item */
+static char *read_clip_plain_text(AParcel *parcel) {
+    char *label = NULL;
+    AParcel_readString(parcel, &label, string_alloc);         /* mLabel */
+    if (label) { free(label); label = NULL; }
+
+    int32_t mimeCount = 0;
+    AParcel_readInt32(parcel, &mimeCount);                    /* mMimeTypes count */
+    for (int32_t i = 0; i < mimeCount; i++) {
+        char *mt = NULL;
+        AParcel_readString(parcel, &mt, string_alloc);
+        if (mt) free(mt);
+    }
+    int64_t ts = 0;
+    AParcel_readInt64(parcel, &ts);                           /* mTimeStamp */
+    int32_t isStyled = 0;
+    AParcel_readInt32(parcel, &isStyled);                     /* isStyledText */
+
+    /* mIcon */
+    int32_t hasIcon = 0;
+    AParcel_readInt32(parcel, &hasIcon);
+    if (hasIcon) return NULL; /* bitmap too complex to skip */
+
+    /* mItems */
+    int32_t numItems = 0;
+    AParcel_readInt32(parcel, &numItems);
 
     char *result = NULL;
-    if (status == STATUS_OK) {
-        AParcel_readInt32(reply, NULL); /* read ClipboardData presence flag */
-        char *text = NULL;
-        AParcel_readString(reply, &text, string_alloc);
-        if (text) {
-            result = strdup(text);
-            free(text);
+    for (int32_t i = 0; i < numItems; i++) {
+        int32_t hasText = 0;
+        AParcel_readInt32(parcel, &hasText);
+        if (hasText) {
+            char *txt = NULL;
+            AParcel_readString(parcel, &txt, string_alloc);
+            if (txt && !result) result = strdup(txt);
+            if (txt) free(txt);
+        }
+        /* htmlText */
+        char *html = NULL;
+        AParcel_readString(parcel, &html, string_alloc);
+        if (html) free(html);
+        /* hasIntent */
+        int32_t hasIntent = 0;
+        AParcel_readInt32(parcel, &hasIntent);
+        if (hasIntent) return result; /* can't skip Intent */
+        /* hasIntentSender — API 35+ */
+        int32_t hasIS = 0;
+        AParcel_readInt32(parcel, &hasIS);
+        if (hasIS) return result; /* can't skip */
+        /* hasUri */
+        int32_t hasUri = 0;
+        AParcel_readInt32(parcel, &hasUri);
+        if (hasUri) return result; /* can't skip Uri */
+        /* hasActivityInfo */
+        int32_t hasAI = 0;
+        AParcel_readInt32(parcel, &hasAI);
+        if (hasAI) return result;
+    }
+    return result;
+}
+
+char *binder_clip_get_text(void) {
+    AParcel *data = NULL;
+    if (AIBinder_prepareTransaction(g_clipboard_svc, &data) != STATUS_OK)
+        return NULL;
+    AParcel_writeString(data, "com.android.shell", 18); /* callingPackage */
+    AParcel_writeString(data, NULL, 0);                  /* attributionTag */
+    AParcel_writeInt32(data, 0);                         /* userId */
+    AParcel_writeInt32(data, 0);                         /* deviceId */
+
+    AParcel *reply = NULL;
+    binder_status_t status = AIBinder_transact(
+        g_clipboard_svc, TRANSACTION_GET_PRIMARY_CLIP, &data, &reply, 0);
+
+    char *result = NULL;
+    if (status == STATUS_OK && reply) {
+        int32_t hasResult = 0;
+        AParcel_readInt32(reply, &hasResult);
+        if (hasResult == 1) {
+            result = read_clip_plain_text(reply);
         }
     }
 
-    AParcel_delete(data);
-    AParcel_delete(reply);
+    if (data) AParcel_delete(data);
+    if (reply) AParcel_delete(reply);
     return result;
 }
 
 int binder_clip_set_text(const char *text) {
-    /* Construct ClipData via transact setPrimaryClip */
-    AParcel *data = AParcel_create();
-    AParcel_writeString(data, "clipsync", 8); /* callingPackage */
-    AParcel_writeInt32(data, 0);              /* userId */
-    AParcel_writeInt32(data, 0);              /* deviceId */
-    AParcel_writeString(data, text, (int32_t)strlen(text));
-    AParcel_writeString(data, "", 0);         /* attributionTag */
+    AParcel *data = NULL;
+    if (AIBinder_prepareTransaction(g_clipboard_svc, &data) != STATUS_OK)
+        return -1;
+
+    write_clip_plain_text(data, "ClipSync", text);     /* ClipData FIRST */
+    AParcel_writeString(data, "com.android.shell", 18); /* callingPackage */
+    AParcel_writeString(data, NULL, 0);                 /* attributionTag */
+    AParcel_writeInt32(data, 0);                        /* userId */
+    AParcel_writeInt32(data, 0);                        /* deviceId */
 
     AParcel *reply = NULL;
     binder_status_t status = AIBinder_transact(
-        g_clipboard_svc,
-        TRANSACTION_SET_PRIMARY_CLIP,
-        &data,
-        &reply,
-        FLAG_ONEWAY
-    );
+        g_clipboard_svc, TRANSACTION_SET_PRIMARY_CLIP, &data, &reply, FLAG_ONEWAY);
 
-    AParcel_delete(data);
+    if (data) AParcel_delete(data);
     if (reply) AParcel_delete(reply);
     return (status == STATUS_OK) ? 0 : -1;
 }
