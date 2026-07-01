@@ -1,0 +1,6 @@
+id=clipsync
+name=ClipSync Clipboard Sync
+version=v1.0
+versionCode=1
+author=ClipSync
+description=System-level clipboard sync daemon with Binder event listener (LAN)

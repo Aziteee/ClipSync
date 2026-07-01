@@ -19,4 +19,12 @@ install:
 	adb push $(TARGET) /data/local/tmp/
 	adb shell chmod 755 /data/local/tmp/$(TARGET)
 
-.PHONY: all clean install
+module: $(TARGET)
+	mkdir -p module/system/bin
+	mkdir -p module/config
+	cp $(TARGET) module/system/bin/
+	cp config/clipsync.toml module/config/
+	cd module && zip -r ../clipsync-module.zip .
+	@echo "Module package: clipsync-module.zip"
+
+.PHONY: all clean install module
