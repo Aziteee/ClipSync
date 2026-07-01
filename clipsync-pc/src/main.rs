@@ -1,7 +1,9 @@
 mod clip;
 mod config;
+mod mdns;
 mod protocol;
 mod sync;
+mod ws;
 
 use std::time::Duration;
 use sync::SyncEngine;
@@ -9,7 +11,10 @@ use tokio::sync::mpsc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    #[cfg(debug_assertions)]
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    #[cfg(not(debug_assertions))]
+    env_logger::init();
 
     let cfg = config::ClipSyncConfig::load("clipsync.toml")?;
     log::info!(
