@@ -1,0 +1,8 @@
+[connection]
+port = 5287
+
+[auth]
+secret = "your-pre-shared-key-here"
+
+[clipboard]
+debounce_ms = 300
