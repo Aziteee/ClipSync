@@ -1,8 +1,0 @@
-[connection]
-port = 5287
-
-[auth]
-secret = ""
-
-[clipboard]
-debounce_ms = 300

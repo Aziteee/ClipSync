@@ -1,6 +1,6 @@
-id=clipsync
-name=ClipSync Clipboard Sync
+id=clipsyncd
+name=ClipSync Daemon
 version=v1.0
 versionCode=1
 author=ClipSync
-description=System-level clipboard sync daemon with Binder event listener (LAN)
+description=ClipSync clipboard sync daemon, injected via init.rc with system_app domain for clipboard_service access

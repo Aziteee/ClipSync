@@ -23,15 +23,18 @@ clean:
 
 install: $(TARGET)
 	adb push $(TARGET) /data/local/tmp/
-	adb shell chmod 755 /data/local/tmp/$(TARGET)
+	adb shell su -c "chmod 755 /data/local/tmp/clipsyncd"
 
 module: $(TARGET)
-	mkdir -p module/system/bin
-	mkdir -p module/config
-	cp $(TARGET) module/system/bin/
-	cp module/config/clipsync.toml module/config/ 2>/dev/null || true
-	cd module && zip -r ../clipsync-module.zip .
-	@echo "Module package: clipsync-module.zip"
+	@if not exist module\system\bin mkdir module\system\bin
+	@copy /Y build\clipsyncd module\system\bin\clipsyncd >nul
+	@echo ========================================
+	@echo KernelSU module ready in module/
+	@echo Push to device:
+	@echo   adb push module /data/local/tmp/module/
+	@echo   adb shell su -c "cp -r /data/local/tmp/module /data/adb/modules/clipsyncd"
+	@echo   adb reboot
+	@echo Check: adb logcat -s clipsyncd
 
 .PHONY: all clean install module test
 
