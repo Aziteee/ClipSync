@@ -8,6 +8,7 @@
 #include "binder_clip.h"
 #include "ws_server.h"
 #include "mdns_publish.h"
+#include "protocol_json.h"
 
 static volatile int running = 1;
 static const char *g_secret = NULL;
@@ -19,13 +20,12 @@ static void on_clip_change(const char *text) {
     if (strcmp(text, g_last_text) == 0) return;
     strncpy(g_last_text, text, sizeof(g_last_text) - 1);
 
-    /* Build push JSON */
-    char json[65536 * 2];
-    unsigned long ts = (unsigned long)time(NULL) * 1000;
-    snprintf(json, sizeof(json),
-        "{\"type\":\"clipboard_push\",\"text\":\"%s\",\"ts\":%lu}",
-        text, ts);
-    ws_server_broadcast(json);
+    unsigned long long ts = (unsigned long long)time(NULL) * 1000ULL;
+    char *json = protocol_json_build_clipboard_push(text, ts);
+    if (json) {
+        ws_server_broadcast(json);
+        free(json);
+    }
     printf("[clipsyncd] pushed: %lu chars\n", (unsigned long)strlen(text));
 }
 
