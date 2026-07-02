@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#define CLIPSYNC_MDNS_SERVICE "_clipsync._tcp"
 #define CLIPSYNC_MDNS_SERVICE_LOCAL "_clipsync._tcp.local"
 
 static char g_instance[64] = "ClipSync Android";
@@ -33,7 +34,7 @@ int mdns_publish_init(struct mg_mgr *mgr, int port, const char *instance_name) {
         g_instance[sizeof(g_instance) - 1] = '\0';
     }
 
-    g_record.srvcproto = mg_str(CLIPSYNC_MDNS_SERVICE_LOCAL);
+    g_record.srvcproto = mg_str(CLIPSYNC_MDNS_SERVICE);
     g_record.txt = mg_str_n(g_txt_raw, sizeof(g_txt_raw) - 1);
     g_record.port = (uint16_t) port;
 
