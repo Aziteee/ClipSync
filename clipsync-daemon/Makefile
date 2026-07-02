@@ -7,6 +7,9 @@ SRCS = clipsyncd.c binder_clip.c ws_server.c mdns_publish.c protocol_json.c cryp
 OBJS = $(SRCS:%.c=$(BUILD_DIR)/%.o)
 NDK_BUILD ?= ndk-build
 ZYGISK_SO = module/zygisk/arm64-v8a.so
+ZYGISK_BUILD_SO = zygisk/libs/arm64-v8a/libzygisk_clipsync.so
+DIST_DIR = dist
+PACKAGE = $(DIST_DIR)/clipsyncd-module.zip
 
 all: $(TARGET) $(BUILD_DIR)/test_clip $(BUILD_DIR)/test_crypto_hmac $(BUILD_DIR)/test_protocol_json $(BUILD_DIR)/test_clipboard_poll $(ZYGISK_SO)
 
@@ -33,7 +36,9 @@ $(ZYGISK_SO): zygisk/jni/main.cpp zygisk/jni/zygisk.hpp zygisk/jni/Android.mk zy
 
 clean:
 	rm -f $(OBJS) $(TARGET) $(ZYGISK_SO)
+	rm -f $(PACKAGE)
 	rmdir $(BUILD_DIR) 2>/dev/null || true
+	rmdir $(DIST_DIR) 2>/dev/null || true
 	$(NDK_BUILD) -C zygisk clean 2>nul || true
 
 install: $(TARGET)
@@ -43,6 +48,7 @@ install: $(TARGET)
 module: $(TARGET) $(ZYGISK_SO)
 	@if not exist module\system\bin mkdir module\system\bin
 	@copy /Y build\clipsyncd module\system\bin\clipsyncd >nul
+	@if exist module\libzygisk_clipsync.so del /F /Q module\libzygisk_clipsync.so
 	@echo ========================================
 	@echo KernelSU module ready in module/
 	@echo Push and install:
@@ -51,7 +57,13 @@ module: $(TARGET) $(ZYGISK_SO)
 	@echo   adb reboot
 	@echo Check: adb logcat -s ClipSyncBridge clipsyncd
 
-.PHONY: all clean install module test test-crypto test-json test-clipboard-poll
+package: module
+	@powershell -NoProfile -ExecutionPolicy Bypass -Command "if (Test-Path 'module\initrc\clipsyncd.rc') { throw 'Refusing to package deprecated module/initrc/clipsyncd.rc' }; if ([Convert]::ToBase64String([Security.Cryptography.MD5]::Create().ComputeHash([IO.File]::ReadAllBytes('$(ZYGISK_BUILD_SO)'))) -ne [Convert]::ToBase64String([Security.Cryptography.MD5]::Create().ComputeHash([IO.File]::ReadAllBytes('$(ZYGISK_SO)')))) { Copy-Item -Path '$(ZYGISK_BUILD_SO)' -Destination '$(ZYGISK_SO)' -Force }; if (!(Test-Path '$(DIST_DIR)')) { New-Item -ItemType Directory -Path '$(DIST_DIR)' | Out-Null }; if (Test-Path '$(PACKAGE)') { Remove-Item '$(PACKAGE)' -Force }; Compress-Archive -Path 'module\*' -DestinationPath '$(PACKAGE)' -Force"
+	@echo ========================================
+	@echo KernelSU module package ready:
+	@echo   $(PACKAGE)
+
+.PHONY: all clean install module package test test-crypto test-json test-clipboard-poll
 
 test: $(BUILD_DIR)/test_clip
 	adb push $(BUILD_DIR)/test_clip /data/local/tmp/

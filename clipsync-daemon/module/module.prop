@@ -3,4 +3,4 @@ name=ClipSync Daemon
 version=v1.0
 versionCode=1
 author=ClipSync
-description=ClipSync clipboard sync daemon, injected via init.rc with system_app domain for clipboard_service access
+description=ClipSync clipboard sync daemon with Zygisk bridge and service.sh startup
