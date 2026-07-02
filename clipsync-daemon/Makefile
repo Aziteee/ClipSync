@@ -21,6 +21,7 @@ $(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/third_party/mongoose/mongoose.o: third_party/mongoose/mongoose.c | $(BUILD_DIR)
+	@if not exist $(BUILD_DIR)\third_party\mongoose mkdir $(BUILD_DIR)\third_party\mongoose
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)\third_party\mongoose\mongoose.o: $(BUILD_DIR)/third_party/mongoose/mongoose.o
