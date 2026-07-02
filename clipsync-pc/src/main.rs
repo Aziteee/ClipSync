@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"]
+
 mod clip;
 mod config;
 mod mdns;
@@ -7,6 +9,7 @@ mod tray;
 mod ws;
 
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use sync::SyncEngine;
@@ -35,14 +38,20 @@ struct App {
     tray: Option<Tray>,
     proxy: EventLoopProxy<UiEvent>,
     action_tx: std::sync::mpsc::Sender<TrayAction>,
+    paused: Arc<AtomicBool>,
 }
 
 impl App {
-    fn new(proxy: EventLoopProxy<UiEvent>, action_tx: std::sync::mpsc::Sender<TrayAction>) -> Self {
+    fn new(
+        proxy: EventLoopProxy<UiEvent>,
+        action_tx: std::sync::mpsc::Sender<TrayAction>,
+        paused: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             tray: None,
             proxy,
             action_tx,
+            paused,
         }
     }
 }
@@ -85,6 +94,14 @@ impl ApplicationHandler<UiEvent> for App {
                     event_loop.exit();
                     return;
                 }
+                if matches!(action, TrayAction::TogglePause) {
+                    let was_paused = self.paused.fetch_xor(true, Ordering::SeqCst);
+                    let now_paused = !was_paused;
+                    if let Some(ref mut tray) = self.tray {
+                        tray.set_paused(now_paused);
+                    }
+                    return;
+                }
                 let _ = self.action_tx.send(action);
             }
         }
@@ -95,6 +112,7 @@ async fn run_sync_loop(
     cfg: Arc<config::ClipSyncConfig>,
     proxy: EventLoopProxy<UiEvent>,
     _action_rx: std::sync::mpsc::Receiver<TrayAction>,
+    paused: Arc<AtomicBool>,
 ) {
     let (clip_tx, mut clip_rx) = mpsc::unbounded_channel::<String>();
     let listener = clip::ClipListener::new(clip_tx);
@@ -124,8 +142,10 @@ async fn run_sync_loop(
                 tokio::select! {
                     Some(uri) = mdns_rx.recv() => break (uri, EndpointOrigin::Discovered),
                 Some(text) = clip_rx.recv() => {
-                    log::info!("Queued pending PC clipboard while disconnected: {} chars", text.chars().count());
-                    engine.store_pending(text);
+                    if !paused.load(Ordering::Relaxed) {
+                        log::info!("Queued pending PC clipboard while disconnected: {} chars", text.chars().count());
+                        engine.store_pending(text);
+                    }
                 }
                     _ = tokio::time::sleep(Duration::from_secs(5)) => {}
                 }
@@ -176,13 +196,15 @@ async fn run_sync_loop(
         'connected: loop {
             tokio::select! {
                 Some(text) = clip_rx.recv() => {
-                    log::info!("Queued PC clipboard for debounce: {} chars", text.chars().count());
-                    debounce_text = Some(text);
-                    debounce_sleep.as_mut().reset(tokio::time::Instant::now() + debounce);
+                    if !paused.load(Ordering::Relaxed) {
+                        log::info!("Queued PC clipboard for debounce: {} chars", text.chars().count());
+                        debounce_text = Some(text);
+                        debounce_sleep.as_mut().reset(tokio::time::Instant::now() + debounce);
+                    }
                 }
                 _ = &mut debounce_sleep, if debounce_text.is_some() => {
                     let text = debounce_text.take().unwrap();
-                    if engine.should_send(&text) {
+                    if !paused.load(Ordering::Relaxed) && engine.should_send(&text) {
                         let msg = protocol::ClipMessage::set(text.clone());
                         if let Err(e) = ws::send(&mut ws, &msg).await {
                             log::error!("Failed to send clipboard_set: {}", e);
@@ -195,9 +217,11 @@ async fn run_sync_loop(
                 result = ws::recv(&mut ws) => {
                     match result {
                         Ok(protocol::ClipMessage::Push { text, .. }) => {
-                            let ok = clip::write(&text);
-                            log::info!("Received clipboard_push: {} chars; PC clipboard write={}", text.chars().count(), ok);
-                            engine.mark_sent(&text);
+                            if !paused.load(Ordering::Relaxed) {
+                                let ok = clip::write(&text);
+                                log::info!("Received clipboard_push: {} chars; PC clipboard write={}", text.chars().count(), ok);
+                                engine.mark_sent(&text);
+                            }
                         }
                         Ok(protocol::ClipMessage::Ping) => {
                             let _ = ws::send(&mut ws, &protocol::ClipMessage::Pong).await;
@@ -225,14 +249,17 @@ fn main() -> anyhow::Result<()> {
 
     let (action_tx, action_rx) = std::sync::mpsc::channel::<TrayAction>();
 
+    let paused = Arc::new(AtomicBool::new(false));
+
     let cfg_clone = cfg.clone();
     let proxy_clone = proxy.clone();
+    let paused_clone = paused.clone();
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(run_sync_loop(cfg_clone, proxy_clone, action_rx));
+        rt.block_on(run_sync_loop(cfg_clone, proxy_clone, action_rx, paused_clone));
     });
 
-    let mut app = App::new(proxy, action_tx);
+    let mut app = App::new(proxy, action_tx, paused);
     event_loop.set_control_flow(ControlFlow::Poll);
     event_loop.run_app(&mut app)?;
 

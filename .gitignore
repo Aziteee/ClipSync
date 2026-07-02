@@ -18,6 +18,11 @@ clipsync-daemon/module/system/
 clipsync-daemon/module/zygisk/
 clipsync-daemon/zygisk/libs/
 clipsync-daemon/zygisk/obj/
+clipsync-daemon/module/libzygisk_clipsync.so
+
+# Local config
+clipsync-pc/clipsync.toml
+opencode.json
 
 # Superpowers SDD workspace (generated task briefs, reports, review packages)
 .superpowers/

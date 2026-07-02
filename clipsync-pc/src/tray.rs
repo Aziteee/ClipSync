@@ -23,6 +23,8 @@ pub struct Tray {
     tray_icon: TrayIcon,
     menu_rx: mpsc::Receiver<TrayAction>,
     _menu: Menu,
+    conn_state: ConnState,
+    paused: bool,
 }
 
 fn make_icon_data(r: u8, g: u8, b: u8) -> Vec<u8> {
@@ -103,18 +105,38 @@ impl Tray {
             tray_icon,
             menu_rx,
             _menu: menu,
+            conn_state: ConnState::Disconnected,
+            paused: false,
         })
     }
 
     pub fn update_state(&mut self, state: ConnState) {
-        let icon = icon_for_state(state);
-        let tooltip = match state {
-            ConnState::Connected => "ClipSync · Connected",
-            ConnState::Connecting => "ClipSync · Connecting\u{2026}",
-            ConnState::Disconnected => "ClipSync · Not connected",
-        };
-        let _ = self.tray_icon.set_icon(Some(icon));
-        let _ = self.tray_icon.set_tooltip(Some(tooltip));
+        self.conn_state = state;
+        self.refresh();
+    }
+
+    pub fn set_paused(&mut self, paused: bool) {
+        self.paused = paused;
+        self.refresh();
+    }
+
+    fn refresh(&mut self) {
+        if self.paused {
+            let rgba = make_icon_data(255, 165, 0);
+            if let Ok(icon) = Icon::from_rgba(rgba, 32, 32) {
+                let _ = self.tray_icon.set_icon(Some(icon));
+            }
+            let _ = self.tray_icon.set_tooltip(Some("ClipSync \u{b7} Paused"));
+        } else {
+            let icon = icon_for_state(self.conn_state);
+            let tooltip = match self.conn_state {
+                ConnState::Connected => "ClipSync \u{b7} Connected",
+                ConnState::Connecting => "ClipSync \u{b7} Connecting\u{2026}",
+                ConnState::Disconnected => "ClipSync \u{b7} Not connected",
+            };
+            let _ = self.tray_icon.set_icon(Some(icon));
+            let _ = self.tray_icon.set_tooltip(Some(tooltip));
+        }
     }
 
     pub fn try_recv_action(&self) -> Option<TrayAction> {
