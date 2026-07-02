@@ -10,9 +10,9 @@
 #include "mdns_publish.h"
 #include "protocol_json.h"
 #include "clipboard_poll.h"
+#include "daemon_config.h"
 
 static volatile int running = 1;
-static const char *g_secret = NULL;
 static char g_last_text[65536] = {0};
 
 static void on_clip_change(const char *text) {
@@ -52,31 +52,31 @@ static void sig_handler(int sig) {
 }
 
 int main(int argc, char *argv[]) {
-    int port = WS_PORT;
-    g_secret = "";
-
-    /* Parse args: clipsyncd [--port N] [--secret S] */
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
-            port = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "--secret") == 0 && i + 1 < argc) {
-            g_secret = argv[++i];
-        }
+    clipsync_daemon_config cfg;
+    clipsync_config_init(&cfg);
+    if (clipsync_config_load_from_args(&cfg, argc, argv) != 0) {
+        return 1;
     }
 
     signal(SIGTERM, sig_handler);
     signal(SIGINT, sig_handler);
 
-    printf("[clipsyncd] starting on port %d...\n", port);
+    printf("[clipsyncd] config: path=%s loaded=%s port=%d secret=%s debounce_ms=%d\n",
+           cfg.config_path,
+           cfg.config_loaded ? "yes" : "no",
+           cfg.port,
+           cfg.secret[0] ? "(set)" : "(empty)",
+           cfg.debounce_ms);
+    printf("[clipsyncd] starting on port %d...\n", cfg.port);
 
     /* Initialize subsystems */
-    if (ws_server_init(port, g_secret) != 0) {
+    if (ws_server_init(cfg.port, cfg.secret) != 0) {
         fprintf(stderr, "[clipsyncd] ws_server_init failed\n");
         return 1;
     }
     ws_server_set_on_set(on_ws_set);
 
-    if (mdns_publish_init(ws_server_mgr(), port, "ClipSync Android") != 0) {
+    if (mdns_publish_init(ws_server_mgr(), cfg.port, "ClipSync Android") != 0) {
         fprintf(stderr, "[clipsyncd] mdns_publish_init failed\n");
         return 1;
     }

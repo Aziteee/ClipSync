@@ -3,15 +3,16 @@ CC ?= aarch64-linux-android33-clang
 CFLAGS = -Wall -Wextra -O2 -Ithird_party/mongoose -DMG_ENABLE_MDNS=1
 LDFLAGS = -lbinder_ndk -ldl
 TARGET = $(BUILD_DIR)/clipsyncd
-SRCS = clipsyncd.c binder_clip.c ws_server.c mdns_publish.c protocol_json.c crypto_hmac.c clipboard_poll.c third_party/mongoose/mongoose.c
+SRCS = clipsyncd.c binder_clip.c ws_server.c mdns_publish.c protocol_json.c crypto_hmac.c clipboard_poll.c daemon_config.c third_party/mongoose/mongoose.c
 OBJS = $(SRCS:%.c=$(BUILD_DIR)/%.o)
 NDK_BUILD ?= ndk-build
 ZYGISK_SO = module/zygisk/arm64-v8a.so
 ZYGISK_BUILD_SO = zygisk/libs/arm64-v8a/libzygisk_clipsync.so
 DIST_DIR = dist
 PACKAGE = $(DIST_DIR)/clipsyncd-module.zip
+CONFIG_SRC = config/clipsync.toml
 
-all: $(TARGET) $(BUILD_DIR)/test_clip $(BUILD_DIR)/test_crypto_hmac $(BUILD_DIR)/test_protocol_json $(BUILD_DIR)/test_clipboard_poll $(ZYGISK_SO)
+all: $(TARGET) $(BUILD_DIR)/test_clip $(BUILD_DIR)/test_crypto_hmac $(BUILD_DIR)/test_protocol_json $(BUILD_DIR)/test_clipboard_poll $(BUILD_DIR)/test_daemon_config $(ZYGISK_SO)
 
 $(BUILD_DIR):
 	@if not exist $(BUILD_DIR) mkdir $(BUILD_DIR)
@@ -45,9 +46,11 @@ install: $(TARGET)
 	adb push $(TARGET) /data/local/tmp/
 	adb shell su -c "chmod 755 /data/local/tmp/clipsyncd"
 
-module: $(TARGET) $(ZYGISK_SO)
+module: $(TARGET) $(ZYGISK_SO) $(CONFIG_SRC)
 	@if not exist module\system\bin mkdir module\system\bin
+	@if not exist module\config mkdir module\config
 	@copy /Y build\clipsyncd module\system\bin\clipsyncd >nul
+	@copy /Y config\clipsync.toml module\config\clipsync.toml >nul
 	@if exist module\libzygisk_clipsync.so del /F /Q module\libzygisk_clipsync.so
 	@echo ========================================
 	@echo KernelSU module ready in module/
@@ -63,7 +66,7 @@ package: module
 	@echo KernelSU module package ready:
 	@echo   $(PACKAGE)
 
-.PHONY: all clean install module package test test-crypto test-json test-clipboard-poll
+.PHONY: all clean install module package test test-crypto test-json test-clipboard-poll test-daemon-config
 
 test: $(BUILD_DIR)/test_clip
 	adb push $(BUILD_DIR)/test_clip /data/local/tmp/
@@ -92,3 +95,9 @@ $(BUILD_DIR)/test_clipboard_poll: test_clipboard_poll.c clipboard_poll.c clipboa
 test-clipboard-poll: $(BUILD_DIR)/test_clipboard_poll
 	adb push $(BUILD_DIR)/test_clipboard_poll /data/local/tmp/
 	adb shell su -c "chmod 755 /data/local/tmp/test_clipboard_poll && /data/local/tmp/test_clipboard_poll"
+
+$(BUILD_DIR)/test_daemon_config: test_daemon_config.c daemon_config.c daemon_config.h protocol.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ test_daemon_config.c daemon_config.c
+
+test-daemon-config: $(BUILD_DIR)/test_daemon_config
+	$(BUILD_DIR)/test_daemon_config

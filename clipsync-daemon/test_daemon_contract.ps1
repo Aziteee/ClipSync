@@ -4,6 +4,8 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $service = Get-Content -Raw (Join-Path $root "module/service.sh")
 $daemonMain = Get-Content -Raw (Join-Path $root "clipsyncd.c")
+$daemonConfig = Get-Content -Raw (Join-Path $root "daemon_config.h")
+$makefile = Get-Content -Raw (Join-Path $root "Makefile")
 $zygiskMain = Get-Content -Raw (Join-Path $root "zygisk/jni/main.cpp")
 $wsServer = Get-Content -Raw (Join-Path $root "ws_server.c")
 $mdnsPublish = Get-Content -Raw (Join-Path $root "mdns_publish.c")
@@ -14,6 +16,22 @@ if ($service -notmatch "/data/adb/modules/clipsyncd/system/bin/clipsyncd") {
 
 if ($service -match "/data/adb/modules/clipsyncd/clipsyncd") {
     throw "service.sh still references the obsolete module-root daemon path"
+}
+
+if ($service -notmatch "--config") {
+    throw "service.sh must pass the packaged clipsync.toml path to clipsyncd"
+}
+
+if ($daemonConfig -notmatch "/data/adb/modules/clipsyncd/config/clipsync\.toml") {
+    throw "daemon must default to the packaged clipsync.toml path"
+}
+
+if ($daemonMain -notmatch "clipsync_config_load_from_args") {
+    throw "clipsyncd must load clipsync.toml before starting services"
+}
+
+if ($makefile -notmatch "module\\config\\clipsync\.toml") {
+    throw "make module must package clipsync.toml into module/config"
 }
 
 if ($wsServer -notmatch "mg_http_listen") {
