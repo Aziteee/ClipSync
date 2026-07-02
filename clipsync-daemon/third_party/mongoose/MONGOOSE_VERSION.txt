@@ -1,0 +1,4 @@
+Mongoose version: 7.21
+Source: https://github.com/cesanta/mongoose/releases/tag/7.21
+Vendored for: Android daemon WebSocket server and DNS-SD/mDNS responder
+License note: Mongoose is GPLv2 or commercial. Confirm this repository's distribution model before publishing binaries.
