@@ -9,6 +9,7 @@ use tokio::sync::mpsc as tokio_mpsc;
 
 const SERVICE_TYPE: &str = "_clipsync._tcp.local.";
 const LAN_SCAN_INTERVAL: Duration = Duration::from_secs(15);
+const LAN_SCAN_MAX_INTERVAL: Duration = Duration::from_secs(120);
 const LAN_SCAN_CONNECT_TIMEOUT: Duration = Duration::from_millis(250);
 const LAN_SCAN_WORKERS: usize = 32;
 
@@ -62,18 +63,32 @@ pub fn discover(port: u16) -> anyhow::Result<tokio_mpsc::UnboundedReceiver<Strin
 }
 
 fn spawn_lan_scan(tx: tokio_mpsc::UnboundedSender<String>, port: u16) {
-    std::thread::spawn(move || loop {
-        if tx.is_closed() {
-            break;
-        }
-        for uri in scan_open_lan_uris(port, LAN_SCAN_CONNECT_TIMEOUT) {
-            log::info!("LAN scan discovered: {}", uri);
-            if tx.send(uri).is_err() {
-                return;
+    std::thread::spawn(move || {
+        let mut interval = LAN_SCAN_INTERVAL;
+        loop {
+            if tx.is_closed() {
+                break;
             }
+            let mut found_any = false;
+            for uri in scan_open_lan_uris(port, LAN_SCAN_CONNECT_TIMEOUT) {
+                found_any = true;
+                log::info!("LAN scan discovered: {}", uri);
+                if tx.send(uri).is_err() {
+                    return;
+                }
+            }
+            std::thread::sleep(interval);
+            interval = next_lan_scan_interval(interval, found_any);
         }
-        std::thread::sleep(LAN_SCAN_INTERVAL);
     });
+}
+
+fn next_lan_scan_interval(current: Duration, found_any: bool) -> Duration {
+    if found_any {
+        LAN_SCAN_INTERVAL
+    } else {
+        (current * 2).min(LAN_SCAN_MAX_INTERVAL)
+    }
 }
 
 fn scan_open_lan_uris(port: u16, timeout: Duration) -> Vec<String> {
@@ -334,5 +349,21 @@ mod tests {
         assert!(!is_clipsync_probe_response(
             b"HTTP/1.1 101 Switching Protocols\r\n\r\n\x81\x0fnot clipsync"
         ));
+    }
+
+    #[test]
+    fn lan_scan_interval_backs_off_when_no_hosts_are_found() {
+        assert_eq!(
+            next_lan_scan_interval(LAN_SCAN_INTERVAL, false),
+            Duration::from_secs(30)
+        );
+    }
+
+    #[test]
+    fn lan_scan_interval_resets_after_discovery() {
+        assert_eq!(
+            next_lan_scan_interval(Duration::from_secs(120), true),
+            LAN_SCAN_INTERVAL
+        );
     }
 }

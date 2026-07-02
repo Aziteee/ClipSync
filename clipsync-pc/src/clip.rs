@@ -110,6 +110,39 @@ pub struct ClipListener {
     tx: mpsc::UnboundedSender<String>,
 }
 
+struct ListenerContext {
+    tx: mpsc::UnboundedSender<String>,
+    deduper: Arc<Mutex<ClipDeduper>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PollingFallback {
+    Start,
+    Skip,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ListenerStartupPlan {
+    start_message_listener: bool,
+    start_polling_fallback: bool,
+}
+
+fn polling_fallback_for_message_listener(message_listener_started: bool) -> PollingFallback {
+    if message_listener_started {
+        PollingFallback::Skip
+    } else {
+        PollingFallback::Start
+    }
+}
+
+fn listener_startup_plan(message_listener_available: bool) -> ListenerStartupPlan {
+    let fallback = polling_fallback_for_message_listener(message_listener_available);
+    ListenerStartupPlan {
+        start_message_listener: message_listener_available,
+        start_polling_fallback: fallback == PollingFallback::Start,
+    }
+}
+
 impl ClipListener {
     pub fn new(tx: mpsc::UnboundedSender<String>) -> Self {
         Self { tx }
@@ -117,19 +150,41 @@ impl ClipListener {
 
     pub fn spawn(self) {
         let deduper = Arc::new(Mutex::new(ClipDeduper::with_initial(read())));
-        let poll_tx = self.tx.clone();
-        std::thread::spawn(move || poll_loop(poll_tx, deduper));
-        std::thread::spawn(move || unsafe { message_loop() });
+        let message_listener_started =
+            spawn_message_listener(self.tx.clone(), Arc::clone(&deduper));
+        let plan = listener_startup_plan(message_listener_started);
+
+        if plan.start_message_listener && !plan.start_polling_fallback {
+            log::info!("Windows clipboard polling fallback skipped");
+        }
+        if plan.start_polling_fallback {
+            log::warn!("Windows clipboard message listener unavailable; starting polling fallback");
+            std::thread::spawn(move || poll_loop(self.tx, deduper));
+        }
     }
 }
 
-unsafe fn message_loop() {
+fn spawn_message_listener(
+    tx: mpsc::UnboundedSender<String>,
+    deduper: Arc<Mutex<ClipDeduper>>,
+) -> bool {
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || unsafe { message_loop(tx, deduper, ready_tx) });
+    ready_rx.recv().unwrap_or(false)
+}
+
+unsafe fn message_loop(
+    tx: mpsc::UnboundedSender<String>,
+    deduper: Arc<Mutex<ClipDeduper>>,
+    ready_tx: std::sync::mpsc::Sender<bool>,
+) {
     log::info!("Windows clipboard message listener starting");
 
     let hmodule: HMODULE = match GetModuleHandleW(None) {
         Ok(h) => h,
         Err(_) => {
             log::error!("GetModuleHandleW failed");
+            let _ = ready_tx.send(false);
             return;
         }
     };
@@ -144,6 +199,7 @@ unsafe fn message_loop() {
 
     if RegisterClassW(&wc) == 0 {
         log::error!("RegisterClassW failed");
+        let _ = ready_tx.send(false);
         return;
     }
 
@@ -164,15 +220,23 @@ unsafe fn message_loop() {
         Ok(h) => h,
         Err(_) => {
             log::error!("CreateWindowExW failed");
+            let _ = ready_tx.send(false);
             return;
         }
     };
 
     if AddClipboardFormatListener(hwnd).is_err() {
         log::error!("AddClipboardFormatListener failed");
+        let _ = DestroyWindow(hwnd);
+        let _ = ready_tx.send(false);
         return;
     }
+
+    let context = Box::new(ListenerContext { tx, deduper });
+    let _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(context) as isize);
+
     log::info!("Windows clipboard message listener ready");
+    let _ = ready_tx.send(true);
 
     let mut msg = MSG::default();
     loop {
@@ -225,9 +289,23 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     match msg {
         WM_CLIPBOARDUPDATE => {
             log::debug!("WM_CLIPBOARDUPDATE received");
+            if !SELF_WRITING.load(Ordering::SeqCst) {
+                if let Some(text) = read() {
+                    let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const ListenerContext;
+                    if !ptr.is_null() {
+                        let context = &*ptr;
+                        emit_if_changed(&context.tx, &context.deduper, text, "message");
+                    }
+                }
+            }
             LRESULT(0)
         }
         WM_DESTROY => {
+            let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ListenerContext;
+            if !ptr.is_null() {
+                let _ = Box::from_raw(ptr);
+                let _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            }
             PostQuitMessage(0);
             LRESULT(0)
         }
@@ -264,5 +342,24 @@ mod tests {
         assert!(deduper.should_emit("hello"));
         assert!(!deduper.should_emit("hello"));
         assert!(deduper.should_emit("world"));
+    }
+
+    #[test]
+    fn polling_fallback_is_skipped_when_message_listener_starts() {
+        assert_eq!(
+            polling_fallback_for_message_listener(true),
+            PollingFallback::Skip
+        );
+    }
+
+    #[test]
+    fn listener_startup_skips_polling_when_message_listener_is_available() {
+        assert_eq!(
+            listener_startup_plan(true),
+            ListenerStartupPlan {
+                start_message_listener: true,
+                start_polling_fallback: false
+            }
+        );
     }
 }
