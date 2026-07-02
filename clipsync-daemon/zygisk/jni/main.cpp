@@ -23,7 +23,7 @@
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-#define SOCK_PATH "/data/local/tmp/clipbridge.sock"
+#define SOCK_PATH "/dev/socket/clipbridge"
 
 using zygisk::ServerSpecializeArgs;
 using zygisk::Api;

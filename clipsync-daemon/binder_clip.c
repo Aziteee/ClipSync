@@ -1,6 +1,6 @@
 /* ClipSync â€?clipboard access via Unix socket to Zygisk bridge
  *
- * The Zygisk module creates a Unix socket at /data/local/tmp/clipbridge.sock
+ * The Zygisk module creates a Unix socket at /dev/socket/clipbridge
  * Protocol: send "READ\n", "WRITE text\n", "HAS\n"; receive "text\n", "OK\n", "1\n"/"0\n"
  */
 
@@ -12,7 +12,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 
-#define SOCK_PATH "/data/local/tmp/clipbridge.sock"
+#define SOCK_PATH "/dev/socket/clipbridge"
 
 static int sock_connect(void) {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
