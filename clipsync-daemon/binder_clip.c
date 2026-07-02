@@ -6,9 +6,55 @@
 #include <string.h>
 #include <stdio.h>
 #include <dlfcn.h>
+#include <stdint.h>
 
 /* Runtime-resolved: linked from system libbinder_ndk.so */
 static AIBinder* (*p_AServiceManager_getService)(const char* instance) = NULL;
+
+/* Bypass Android 12+ clipboard foreground check via IPCThreadState */
+static void*   (*p_IPCThreadState_self)(void) = NULL;
+static int64_t (*p_IPCThreadState_clearCallingIdentity)(void*) = NULL;
+static void    (*p_IPCThreadState_restoreCallingIdentity)(void*, int64_t) = NULL;
+
+static int g_has_ipc_bypass = 0;
+
+static int init_ipc_bypass(void) {
+    void *h = dlopen("libbinder.so", RTLD_NOW);
+    if (!h) {
+        fprintf(stderr, "[binder_clip] dlopen libbinder.so failed: %s\n", dlerror());
+        return -1;
+    }
+    p_IPCThreadState_self = dlsym(h, "_ZN7android14IPCThreadState4selfEv");
+    p_IPCThreadState_clearCallingIdentity = dlsym(h, "_ZN7android14IPCThreadState20clearCallingIdentityEv");
+    p_IPCThreadState_restoreCallingIdentity = dlsym(h, "_ZN7android14IPCThreadState22restoreCallingIdentityEl");
+    if (!p_IPCThreadState_self || !p_IPCThreadState_clearCallingIdentity || !p_IPCThreadState_restoreCallingIdentity) {
+        fprintf(stderr, "[binder_clip] IPCThreadState symbols not found\n");
+        dlclose(h);
+        return -1;
+    }
+    g_has_ipc_bypass = 1;
+    printf("[binder_clip] IPCThreadState bypass initialized\n");
+    return 0;
+}
+
+/* Call before any clipboard transaction — spoof as system_server (UID 1000) */
+static int64_t bypass_begin(void) {
+    if (!g_has_ipc_bypass) return 0;
+    void *self = p_IPCThreadState_self();
+    /* Save current identity, then fake as UID 1000 (system_server) */
+    int64_t saved = p_IPCThreadState_clearCallingIdentity(self);
+    int64_t fake = ((int64_t)1000 << 32) | 0; /* UID=1000, PID=0 */
+    p_IPCThreadState_restoreCallingIdentity(self, fake);
+    return saved;
+}
+
+/* Call after clipboard transaction */
+static void bypass_end(int64_t saved) {
+    if (!g_has_ipc_bypass) return;
+    void *self = p_IPCThreadState_self();
+    p_IPCThreadState_clearCallingIdentity(self);     /* discard fake */
+    p_IPCThreadState_restoreCallingIdentity(self, saved); /* restore original */
+}
 
 /* Transaction codes — API 36 IClipboard.aidl method order:
  *   0: setPrimaryClip             = 1
@@ -91,6 +137,9 @@ int binder_clip_init(void) {
         return -1;
     }
     printf("[binder_clip] dlsym OK\n");
+
+    /* Init Binder identity bypass (skip Android 12+ foreground check) */
+    init_ipc_bypass();
 
     /* Get the clipboard service */
     g_clipboard_svc = p_AServiceManager_getService("clipboard");
@@ -351,9 +400,12 @@ static char *read_clip_plain_text(AParcel *parcel) {
 }
 
 char *binder_clip_get_text(void) {
+    int64_t token = bypass_begin();
     AParcel *data = NULL;
-    if (AIBinder_prepareTransaction(g_clipboard_svc, &data) != STATUS_OK)
+    if (AIBinder_prepareTransaction(g_clipboard_svc, &data) != STATUS_OK) {
+        bypass_end(token);
         return NULL;
+    }
     AParcel_writeString(data, "com.android.shell", 18); /* callingPackage */
     AParcel_writeString(data, NULL, 0);                  /* attributionTag */
     AParcel_writeInt32(data, 0);                         /* userId */
@@ -369,16 +421,24 @@ char *binder_clip_get_text(void) {
         AParcel_readInt32(reply, &hasResult);
         if (hasResult == 1) {
             result = read_clip_plain_text(reply);
+        } else {
+            printf("[bypass] get_text hasResult=%d (0x%x)\n", hasResult, hasResult);
         }
     }
 
     if (data) AParcel_delete(data);
     if (reply) AParcel_delete(reply);
+    bypass_end(token);
     return result;
 }
 
 int binder_clip_set_text(const char *text) {
+    int64_t token = bypass_begin();
     AParcel *data = NULL;
+    if (AIBinder_prepareTransaction(g_clipboard_svc, &data) != STATUS_OK) {
+        bypass_end(token);
+        return -1;
+    }
     if (AIBinder_prepareTransaction(g_clipboard_svc, &data) != STATUS_OK)
         return -1;
 
@@ -394,6 +454,7 @@ int binder_clip_set_text(const char *text) {
 
     if (data) AParcel_delete(data);
     if (reply) AParcel_delete(reply);
+    bypass_end(token);
     return (status == STATUS_OK) ? 0 : -1;
 }
 
