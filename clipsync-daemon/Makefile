@@ -3,19 +3,15 @@ CC ?= aarch64-linux-android33-clang
 CFLAGS = -Wall -Wextra -O2 -Ithird_party/mongoose -DMG_ENABLE_MDNS=1
 LDFLAGS = -lbinder_ndk -ldl
 TARGET = $(BUILD_DIR)/clipsyncd
-SRCS = clipsyncd.c binder_clip.c ws_server.c mdns_publish.c third_party/mongoose/mongoose.c
+SRCS = clipsyncd.c binder_clip.c ws_server.c mdns_publish.c protocol_json.c crypto_hmac.c third_party/mongoose/mongoose.c
 OBJS = $(SRCS:%.c=$(BUILD_DIR)/%.o)
 NDK_BUILD ?= ndk-build
 ZYGISK_SO = module/zygisk/arm64-v8a.so
-MONGOOSE_OBJ = $(BUILD_DIR)/third_party/mongoose/mongoose.o
-MONGOOSE_OBJ_WIN = $(BUILD_DIR)\third_party\mongoose\mongoose.o
 
-all: $(TARGET) $(BUILD_DIR)/test_clip $(ZYGISK_SO)
+all: $(TARGET) $(BUILD_DIR)/test_clip $(BUILD_DIR)/test_crypto_hmac $(BUILD_DIR)/test_protocol_json $(ZYGISK_SO)
 
 $(BUILD_DIR):
 	@if not exist $(BUILD_DIR) mkdir $(BUILD_DIR)
-
-$(BUILD_DIR)/third_party/mongoose:
 	@if not exist $(BUILD_DIR)\third_party\mongoose mkdir $(BUILD_DIR)\third_party\mongoose
 
 $(TARGET): $(OBJS) protocol.h | $(BUILD_DIR)
@@ -24,10 +20,10 @@ $(TARGET): $(OBJS) protocol.h | $(BUILD_DIR)
 $(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(MONGOOSE_OBJ): third_party/mongoose/mongoose.c | $(BUILD_DIR)/third_party/mongoose
+$(BUILD_DIR)/third_party/mongoose/mongoose.o: third_party/mongoose/mongoose.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(MONGOOSE_OBJ_WIN): $(MONGOOSE_OBJ)
+$(BUILD_DIR)\third_party\mongoose\mongoose.o: $(BUILD_DIR)/third_party/mongoose/mongoose.o
 
 $(ZYGISK_SO): zygisk/jni/main.cpp zygisk/jni/zygisk.hpp zygisk/jni/Android.mk zygisk/jni/Application.mk
 	$(NDK_BUILD) -C zygisk
