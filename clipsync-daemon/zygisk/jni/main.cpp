@@ -167,13 +167,40 @@ public:
         (void)api;
         g_env = env;
         LOGD("ClipSync Zygisk module loaded");
-    }
-    void postServerSpecialize(const ServerSpecializeArgs *args) override {
-        (void)args;
-        LOGD("starting clipboard bridge socket server");
-        pthread_t t;
-        pthread_create(&t, nullptr, socket_thread, nullptr);
-        pthread_detach(t);
+
+        // Check if we're in system_server
+        jclass procClass = env->FindClass("android/os/Process");
+        if (procClass) {
+            jmethodID myPid = env->GetStaticMethodID(procClass, "myPid", "()I");
+            jint pid = env->CallStaticIntMethod(procClass, myPid);
+            jmethodID myUid = env->GetStaticMethodID(procClass, "myUid", "()I");
+            jint uid = env->CallStaticIntMethod(procClass, myUid);
+            LOGD("loaded in pid=%d uid=%d", pid, uid);
+
+            /* system_server runs as uid=1000. We also check process name. */
+            if (uid == 1000) {
+                jclass amClass = env->FindClass("android/app/ActivityThread");
+                if (amClass) {
+                    jmethodID getProcessName = env->GetStaticMethodID(amClass, "currentProcessName", "()Ljava/lang/String;");
+                    if (getProcessName) {
+                        jstring name = (jstring)env->CallStaticObjectMethod(amClass, getProcessName);
+                        if (name) {
+                            const char *s = env->GetStringUTFChars(name, nullptr);
+                            if (s && strstr(s, "system_server")) {
+                                LOGD("detected system_server, starting bridge socket");
+                                pthread_t t;
+                                pthread_create(&t, nullptr, socket_thread, nullptr);
+                                pthread_detach(t);
+                            }
+                            if (s) env->ReleaseStringUTFChars(name, s);
+                            env->DeleteLocalRef(name);
+                        }
+                    }
+                    env->DeleteLocalRef(amClass);
+                }
+            }
+            env->DeleteLocalRef(procClass);
+        }
     }
 };
 
