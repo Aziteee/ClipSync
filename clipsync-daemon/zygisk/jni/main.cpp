@@ -8,7 +8,6 @@
  *   → clipsyncd connects to the socket to read/write clipboard
  */
 #include "zygisk.hpp"
-#include <android/log.h>
 #include <jni.h>
 #include <cstdio>
 #include <cstdlib>
@@ -20,8 +19,8 @@
 #include <pthread.h>
 
 #define TAG "ClipSyncBridge"
-#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, TAG, __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+#define LOGD(...) do { FILE *f = fopen("/data/local/tmp/clipbridge.log", "a"); if (f) { fprintf(f, __VA_ARGS__); fprintf(f, "\n"); fclose(f); } } while(0)
+#define LOGE(...) LOGD("ERROR: " __VA_ARGS__)
 
 #define SOCK_PATH "/dev/socket/clipbridge"
 
