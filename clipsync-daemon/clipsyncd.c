@@ -77,17 +77,10 @@ int main(int argc, char *argv[]) {
     }
     binder_clip_set_callback(on_clip_change);
 
-    /* Test read/write with IPCThreadState bypass */
+    /* Verify bridge: read current clipboard */
     {
         char *txt = binder_clip_get_text();
-        printf("[clipsyncd] test read: %s\n", txt ? txt : "(null/empty)");
-        if (txt) free(txt);
-
-        int wr = binder_clip_set_text("CLIPSYNC BYPASS TEST OK!");
-        printf("[clipsyncd] test write: %d\n", wr);
-
-        txt = binder_clip_get_text();
-        printf("[clipsyncd] test read back: %s\n", txt ? txt : "(null/empty)");
+        printf("[clipsyncd] current clipboard: %s\n", txt ? txt : "(empty)");
         if (txt) free(txt);
     }
 

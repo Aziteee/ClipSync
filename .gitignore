@@ -15,6 +15,9 @@ Thumbs.db
 # Android daemon build
 clipsync-daemon/build/
 clipsync-daemon/module/system/
+clipsync-daemon/module/zygisk/
+clipsync-daemon/zygisk/libs/
+clipsync-daemon/zygisk/obj/
 
 # Superpowers SDD workspace (generated task briefs, reports, review packages)
 .superpowers/
