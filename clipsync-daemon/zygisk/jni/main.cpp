@@ -8,24 +8,71 @@
  */
 
 #include "zygisk.hpp"
-#include <android/binder_ibinder.h>
-#include <android/binder_parcel.h>
-#include <android/binder_status.h>
 #include <android/log.h>
 #include <dlfcn.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <cstdint>
+#include <jni.h>
 
 #define TAG "ClipSyncBridge"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-/* Transaction codes — simple interface:
- *   1: getClipText → returns String (or empty)
- *   2: setClipText  → takes String callingPackage + String text
- *   3: hasClip      → returns int32 (1/0)
- */
+/* ===== Binder NDK types (minimal from headers) ===== */
+typedef int32_t binder_status_t;
+typedef uint32_t transaction_code_t;
+typedef uint32_t binder_flags_t;
+#define STATUS_OK     0
+#define STATUS_BAD_VALUE (-22)
+#define STATUS_UNKNOWN_TRANSACTION (-2147483645)
+#define FLAG_ONEWAY   1
+
+struct AIBinder;
+struct AIBinder_Class;
+struct AParcel;
+
+/* ===== Runtime-resolved Binder NDK functions ===== */
+static void *g_binder_handle = nullptr;
+
+static AIBinder_Class* (*_Class_define)(const char*, void*(*)(void*), void(*)(void*),
+    binder_status_t(*)(AIBinder*, transaction_code_t, const AParcel*, AParcel*)) = nullptr;
+static AIBinder* (*_AIBinder_new)(const AIBinder_Class*, void*) = nullptr;
+static void (*_Class_disableToken)(AIBinder_Class*) = nullptr;
+static binder_status_t (*_prepareTx)(AIBinder*, AParcel**) = nullptr;
+static binder_status_t (*_transact)(AIBinder*, transaction_code_t, AParcel**, AParcel**, binder_flags_t) = nullptr;
+static binder_status_t (*_writeString)(AParcel*, const char*, int32_t) = nullptr;
+static binder_status_t (*_writeInt32)(AParcel*, int32_t) = nullptr;
+static binder_status_t (*_readInt32)(const AParcel*, int32_t*) = nullptr;
+static binder_status_t (*_readString)(const AParcel*, void*, bool(*)(void*,int32_t,char**)) = nullptr;
+static void (*_parcelDelete)(AParcel*) = nullptr;
+static bool (*_associateClass)(AIBinder*, const AIBinder_Class*) = nullptr;
+
+static bool resolve_binder() {
+    if (g_binder_handle) return true;
+    g_binder_handle = dlopen("libbinder_ndk.so", RTLD_NOW);
+    if (!g_binder_handle) { LOGE("dlopen libbinder_ndk failed"); return false; }
+    *(void**)&_Class_define  = dlsym(g_binder_handle, "AIBinder_Class_define");
+    *(void**)&_AIBinder_new  = dlsym(g_binder_handle, "AIBinder_new");
+    *(void**)&_Class_disableToken = dlsym(g_binder_handle, "AIBinder_Class_disableInterfaceTokenHeader");
+    *(void**)&_prepareTx     = dlsym(g_binder_handle, "AIBinder_prepareTransaction");
+    *(void**)&_transact      = dlsym(g_binder_handle, "AIBinder_transact");
+    *(void**)&_writeString   = dlsym(g_binder_handle, "AParcel_writeString");
+    *(void**)&_writeInt32    = dlsym(g_binder_handle, "AParcel_writeInt32");
+    *(void**)&_readInt32     = dlsym(g_binder_handle, "AParcel_readInt32");
+    *(void**)&_readString    = dlsym(g_binder_handle, "AParcel_readString");
+    *(void**)&_parcelDelete  = dlsym(g_binder_handle, "AParcel_delete");
+    *(void**)&_associateClass= dlsym(g_binder_handle, "AIBinder_associateClass");
+    if (!_Class_define || !_AIBinder_new || !_prepareTx || !_transact ||
+        !_writeString || !_writeInt32 || !_readInt32 || !_readString || !_parcelDelete) {
+        LOGE("missing binder symbols"); return false;
+    }
+    LOGD("binder symbols resolved");
+    return true;
+}
+
+/* Bridge transaction codes */
 #define BRIDGE_GET_TEXT  1
 #define BRIDGE_SET_TEXT  2
 #define BRIDGE_HAS_CLIP  3
@@ -225,32 +272,31 @@ static binder_status_t bridge_onTransact(
     case BRIDGE_GET_TEXT: {
         char *text = readClipboardText();
         if (text) {
-            AParcel_writeInt32(out, 1);  // has text
-            AParcel_writeString(out, text, (int32_t)strlen(text));
+            _writeInt32(out, 1);
+            _writeString(out, text, (int32_t)strlen(text));
             free(text);
         } else {
-            AParcel_writeInt32(out, 0);  // no text
+            _writeInt32(out, 0);
         }
         return STATUS_OK;
     }
     case BRIDGE_SET_TEXT: {
-        // Read callingPackage (skip), then text
         char *pkg = nullptr;
-        AParcel_readString(in, &pkg, parcel_alloc);
+        _readString(in, &pkg, parcel_alloc);
         if (pkg) free(pkg);
 
         char *text = nullptr;
-        AParcel_readString(in, &text, parcel_alloc);
+        _readString(in, &text, parcel_alloc);
         if (!text) return STATUS_BAD_VALUE;
 
         int ret = writeClipboardText(text);
         free(text);
-        AParcel_writeInt32(out, ret == 0 ? 1 : 0);
+        _writeInt32(out, ret == 0 ? 1 : 0);
         return STATUS_OK;
     }
     case BRIDGE_HAS_CLIP: {
         char *text = readClipboardText();
-        AParcel_writeInt32(out, text ? 1 : 0);
+        _writeInt32(out, text ? 1 : 0);
         if (text) free(text);
         return STATUS_OK;
     }
@@ -259,32 +305,29 @@ static binder_status_t bridge_onTransact(
     }
 }
 
-/* Dynamically resolve AServiceManager_addService (not in NDK stubs) */
+/* Resolve addService and register clipboard_bridge */
 static void registerBridgeService() {
-    void *h = dlopen("libbinder_ndk.so", RTLD_NOW);
-    if (!h) { LOGE("dlopen libbinder_ndk failed"); return; }
+    if (!resolve_binder()) return;
 
     typedef AIBinder* (*addServiceFn)(const char*, AIBinder*);
-    auto addService = (addServiceFn)dlsym(h, "AServiceManager_addService");
+    auto addService = (addServiceFn)dlsym(g_binder_handle, "AServiceManager_addService");
     if (!addService) {
-        // Try alternative names
-        addService = (addServiceFn)dlsym(h, "_Z28AServiceManager_addServicePKcP7AIBinder");
+        addService = (addServiceFn)dlsym(g_binder_handle, "_Z28AServiceManager_addServicePKcP7AIBinder");
     }
     if (!addService) { LOGE("addService symbol not found"); return; }
 
-    AIBinder_Class *cls = AIBinder_Class_define(
-        "clipboard_bridge",
-        bridge_onCreate,
-        bridge_onDestroy,
-        bridge_onTransact);
+    AIBinder_Class *cls = _Class_define(
+        "clipboard_bridge", bridge_onCreate, bridge_onDestroy, bridge_onTransact);
     if (!cls) { LOGE("Class_define failed"); return; }
 
-    AIBinder *binder = AIBinder_new(cls, nullptr);
+    _Class_disableToken(cls);
+
+    AIBinder *binder = _AIBinder_new(cls, nullptr);
     if (!binder) { LOGE("AIBinder_new failed"); return; }
 
     AIBinder *result = addService("clipboard_bridge", binder);
     if (result) {
-        LOGD("clipboard_bridge service registered successfully");
+        LOGD("clipboard_bridge registered");
     } else {
         LOGE("addService failed");
     }
