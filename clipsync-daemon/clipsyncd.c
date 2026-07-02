@@ -9,6 +9,7 @@
 #include "ws_server.h"
 #include "mdns_publish.h"
 #include "protocol_json.h"
+#include "clipboard_poll.h"
 
 static volatile int running = 1;
 static const char *g_secret = NULL;
@@ -99,7 +100,8 @@ int main(int argc, char *argv[]) {
     int clipboard_poll_ticks = 0;
     while (running) {
         ws_server_poll(50);   /* drive mongoose (WS + mDNS) */
-        if (++clipboard_poll_ticks >= 10) {
+        int poll_every_ticks = clipsync_clipboard_poll_ticks_for_clients(ws_server_authenticated_count());
+        if (++clipboard_poll_ticks >= poll_every_ticks) {
             clipboard_poll_ticks = 0;
             poll_clipboard_change();
         }

@@ -48,6 +48,10 @@ if ($daemonMain -notmatch "poll_clipboard_change") {
     throw "clipsyncd must poll Android clipboard changes for phone-to-PC sync"
 }
 
+if ($daemonMain -notmatch "ws_server_authenticated_count") {
+    throw "clipsyncd must adapt clipboard polling based on authenticated WebSocket clients"
+}
+
 if ($zygiskMain -match "com\.android\.shell") {
     throw "Zygisk clipboard bridge runs as system_server and must not claim com.android.shell"
 }

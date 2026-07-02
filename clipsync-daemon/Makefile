@@ -3,12 +3,12 @@ CC ?= aarch64-linux-android33-clang
 CFLAGS = -Wall -Wextra -O2 -Ithird_party/mongoose -DMG_ENABLE_MDNS=1
 LDFLAGS = -lbinder_ndk -ldl
 TARGET = $(BUILD_DIR)/clipsyncd
-SRCS = clipsyncd.c binder_clip.c ws_server.c mdns_publish.c protocol_json.c crypto_hmac.c third_party/mongoose/mongoose.c
+SRCS = clipsyncd.c binder_clip.c ws_server.c mdns_publish.c protocol_json.c crypto_hmac.c clipboard_poll.c third_party/mongoose/mongoose.c
 OBJS = $(SRCS:%.c=$(BUILD_DIR)/%.o)
 NDK_BUILD ?= ndk-build
 ZYGISK_SO = module/zygisk/arm64-v8a.so
 
-all: $(TARGET) $(BUILD_DIR)/test_clip $(BUILD_DIR)/test_crypto_hmac $(BUILD_DIR)/test_protocol_json $(ZYGISK_SO)
+all: $(TARGET) $(BUILD_DIR)/test_clip $(BUILD_DIR)/test_crypto_hmac $(BUILD_DIR)/test_protocol_json $(BUILD_DIR)/test_clipboard_poll $(ZYGISK_SO)
 
 $(BUILD_DIR):
 	@if not exist $(BUILD_DIR) mkdir $(BUILD_DIR)
@@ -51,7 +51,7 @@ module: $(TARGET) $(ZYGISK_SO)
 	@echo   adb reboot
 	@echo Check: adb logcat -s ClipSyncBridge clipsyncd
 
-.PHONY: all clean install module test test-crypto test-json
+.PHONY: all clean install module test test-crypto test-json test-clipboard-poll
 
 test: $(BUILD_DIR)/test_clip
 	adb push $(BUILD_DIR)/test_clip /data/local/tmp/
@@ -73,3 +73,10 @@ $(BUILD_DIR)/test_protocol_json: test_protocol_json.c protocol_json.c protocol_j
 test-json: $(BUILD_DIR)/test_protocol_json
 	adb push $(BUILD_DIR)/test_protocol_json /data/local/tmp/
 	adb shell su -c "chmod 755 /data/local/tmp/test_protocol_json && /data/local/tmp/test_protocol_json"
+
+$(BUILD_DIR)/test_clipboard_poll: test_clipboard_poll.c clipboard_poll.c clipboard_poll.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ test_clipboard_poll.c clipboard_poll.c
+
+test-clipboard-poll: $(BUILD_DIR)/test_clipboard_poll
+	adb push $(BUILD_DIR)/test_clipboard_poll /data/local/tmp/
+	adb shell su -c "chmod 755 /data/local/tmp/test_clipboard_poll && /data/local/tmp/test_clipboard_poll"
