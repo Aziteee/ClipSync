@@ -343,9 +343,9 @@ public:
         LOGD("ClipSync Zygisk module loaded");
     }
 
-    void preServerSpecialize(ServerSpecializeArgs *args) override {
+    void postServerSpecialize(const ServerSpecializeArgs *args) override {
         (void)args;
-        LOGD("system_server specialize — registering clipboard_bridge");
+        LOGD("system_server post-specialize — registering clipboard_bridge");
         registerBridgeService();
     }
 };
