@@ -14,7 +14,7 @@ function ConvertTo-HexLower([byte[]]$Bytes) {
 
 $ws = [System.Net.WebSockets.ClientWebSocket]::new()
 $ct = [Threading.CancellationToken]::None
-$ws.ConnectAsync([Uri]$Uri, $ct).GetAwaiter().GetResult()
+$null = $ws.ConnectAsync([Uri]$Uri, $ct).GetAwaiter().GetResult()
 
 $buffer = New-Object byte[] 4096
 $segment = [ArraySegment[byte]]::new($buffer)
@@ -31,7 +31,7 @@ $digest = $hmac.ComputeHash([Text.Encoding]::UTF8.GetBytes([string]$hello.challe
 $response = ConvertTo-HexLower $digest
 $authJson = @{ type = "auth"; response = $response } | ConvertTo-Json -Compress
 $authBytes = [Text.Encoding]::UTF8.GetBytes($authJson)
-$ws.SendAsync([ArraySegment[byte]]::new($authBytes), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $ct).GetAwaiter().GetResult()
+$null = $ws.SendAsync([ArraySegment[byte]]::new($authBytes), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $ct).GetAwaiter().GetResult()
 
 $result = $ws.ReceiveAsync($segment, $ct).GetAwaiter().GetResult()
 $authResultJson = [Text.Encoding]::UTF8.GetString($buffer, 0, $result.Count)
@@ -43,7 +43,7 @@ if ($authResult.type -ne "auth_ok") {
 
 $pingJson = @{ type = "ping" } | ConvertTo-Json -Compress
 $pingBytes = [Text.Encoding]::UTF8.GetBytes($pingJson)
-$ws.SendAsync([ArraySegment[byte]]::new($pingBytes), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $ct).GetAwaiter().GetResult()
+$null = $ws.SendAsync([ArraySegment[byte]]::new($pingBytes), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $ct).GetAwaiter().GetResult()
 
 $result = $ws.ReceiveAsync($segment, $ct).GetAwaiter().GetResult()
 $pongJson = [Text.Encoding]::UTF8.GetString($buffer, 0, $result.Count)
@@ -53,5 +53,5 @@ if ($pong.type -ne "pong") {
     throw "Expected pong, got: $pongJson"
 }
 
-$ws.CloseAsync([System.Net.WebSockets.WebSocketCloseStatus]::NormalClosure, "done", $ct).GetAwaiter().GetResult()
+$null = $ws.CloseAsync([System.Net.WebSockets.WebSocketCloseStatus]::NormalClosure, "done", $ct).GetAwaiter().GetResult()
 Write-Host "websocket smoke passed: $Uri"
