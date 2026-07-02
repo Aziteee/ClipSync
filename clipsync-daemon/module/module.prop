@@ -2,5 +2,5 @@ id=clipsyncd
 name=ClipSync Daemon
 version=v1.0
 versionCode=1
-author=ClipSync
-description=ClipSync clipboard sync daemon with Zygisk bridge and service.sh startup
+author=Aziteee
+description=ClipSync clipboard sync daemon with Zygisk bridge
