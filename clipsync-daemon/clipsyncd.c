@@ -66,7 +66,7 @@ int main(int argc, char *argv[]) {
     }
     ws_server_set_on_set(on_ws_set);
 
-    if (mdns_publish_init(port) != 0) {
+    if (mdns_publish_init(ws_server_mgr(), port, "ClipSync Android") != 0) {
         fprintf(stderr, "[clipsyncd] mdns_publish_init failed\n");
         return 1;
     }

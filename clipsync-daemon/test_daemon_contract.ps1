@@ -4,6 +4,7 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $service = Get-Content -Raw (Join-Path $root "module/service.sh")
 $wsServer = Get-Content -Raw (Join-Path $root "ws_server.c")
+$mdnsPublish = Get-Content -Raw (Join-Path $root "mdns_publish.c")
 
 if ($service -notmatch "/data/adb/modules/clipsyncd/system/bin/clipsyncd") {
     throw "service.sh must launch the packaged daemon at system/bin/clipsyncd"
@@ -27,6 +28,14 @@ if ($wsServer -notmatch "mg_ws_upgrade") {
 
 if ($wsServer -notmatch "mg_ws_send") {
     throw "WebSocket server must send real WebSocket frames"
+}
+
+if ($mdnsPublish -notmatch "mg_mdns_listen") {
+    throw "mdns_publish must register a real Mongoose mDNS listener"
+}
+
+if ($mdnsPublish -notmatch "_clipsync\._tcp") {
+    throw "mdns_publish must advertise _clipsync._tcp"
 }
 
 Write-Host "daemon contract checks passed"
