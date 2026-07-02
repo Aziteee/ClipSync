@@ -14,6 +14,7 @@ Thumbs.db
 
 # Android daemon build
 clipsync-daemon/build/
+clipsync-daemon/module/system/
 
 # Superpowers SDD workspace (generated task briefs, reports, review packages)
 .superpowers/
