@@ -33,7 +33,16 @@ static void on_ws_set(const char *text) {
     if (!text) return;
     printf("[clipsyncd] received set: %lu chars\n", (unsigned long)strlen(text));
     strncpy(g_last_text, text, sizeof(g_last_text) - 1);
-    binder_clip_set_text(text);
+    if (binder_clip_set_text(text) != 0) {
+        fprintf(stderr, "[clipsyncd] failed to write Android clipboard\n");
+    }
+}
+
+static void poll_clipboard_change(void) {
+    char *text = binder_clip_get_text();
+    if (!text) return;
+    on_clip_change(text);
+    free(text);
 }
 
 static void sig_handler(int sig) {
@@ -87,8 +96,13 @@ int main(int argc, char *argv[]) {
     printf("[clipsyncd] running. Waiting for connections and clipboard events...\n");
 
     /* Event loop */
+    int clipboard_poll_ticks = 0;
     while (running) {
         ws_server_poll(50);   /* drive mongoose (WS + mDNS) */
+        if (++clipboard_poll_ticks >= 10) {
+            clipboard_poll_ticks = 0;
+            poll_clipboard_change();
+        }
     }
 
     printf("[clipsyncd] shutting down.\n");

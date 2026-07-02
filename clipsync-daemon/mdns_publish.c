@@ -9,7 +9,7 @@
 #define CLIPSYNC_MDNS_SERVICE_LOCAL "_clipsync._tcp.local"
 
 static char g_instance[64] = "ClipSync Android";
-static char g_txt_raw[] = "\x09" "version=1" "\x0a" "proto=json" "\x10" "auth=hmac-sha256";
+static char g_txt_raw[] = "\x09" "version=1" "\x0a" "proto=json" "\x11" "auth=hmac-sha256";
 static struct mg_dnssd_record g_record;
 static struct mg_connection *g_mdns = NULL;
 

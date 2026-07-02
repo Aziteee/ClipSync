@@ -1,6 +1,6 @@
-/* ClipSync �?clipboard access via Unix socket to Zygisk bridge
+/* ClipSync clipboard access via Unix socket to Zygisk bridge
  *
- * The Zygisk module creates a Unix socket at /dev/socket/clipbridge
+ * The Zygisk module creates an abstract Unix socket @clipbridge
  * Protocol: send "READ\n", "WRITE text\n", "HAS\n"; receive "text\n", "OK\n", "1\n"/"0\n"
  */
 
@@ -12,15 +12,17 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 
-#define SOCK_PATH "/dev/socket/clipbridge"
+#define SOCK_ABSTRACT_NAME "clipbridge"
 
 static int sock_connect(void) {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return -1;
     struct sockaddr_un addr = {};
     addr.sun_family = AF_UNIX;
-    strcpy(addr.sun_path, SOCK_PATH);
-    if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+    addr.sun_path[0] = '\0';
+    strncpy(addr.sun_path + 1, SOCK_ABSTRACT_NAME, sizeof(addr.sun_path) - 2);
+    socklen_t addr_len = (socklen_t)(1 + strlen(SOCK_ABSTRACT_NAME) + sizeof(sa_family_t));
+    if (connect(fd, (struct sockaddr*)&addr, addr_len) < 0) {
         close(fd);
         return -1;
     }
@@ -52,7 +54,7 @@ int binder_clip_init(void) {
             sleep(1);
         }
     }
-    fprintf(stderr, "[binder_clip] cannot connect to %s after 10 attempts\n", SOCK_PATH);
+    fprintf(stderr, "[binder_clip] cannot connect to @%s after 10 attempts\n", SOCK_ABSTRACT_NAME);
     return -1;
 }
 

@@ -15,6 +15,10 @@ pub struct ClipSyncConfig {
 pub struct ConnectionConfig {
     #[serde(default = "default_port")]
     pub port: u16,
+    #[serde(default)]
+    pub host: Option<String>,
+    #[serde(default)]
+    pub uri: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,8 +33,12 @@ pub struct ClipboardConfig {
     pub debounce_ms: u64,
 }
 
-fn default_port() -> u16 { 5287 }
-fn default_debounce_ms() -> u64 { 300 }
+fn default_port() -> u16 {
+    5287
+}
+fn default_debounce_ms() -> u64 {
+    300
+}
 
 impl Default for ClipSyncConfig {
     fn default() -> Self {
@@ -44,19 +52,27 @@ impl Default for ClipSyncConfig {
 
 impl Default for ConnectionConfig {
     fn default() -> Self {
-        Self { port: default_port() }
+        Self {
+            port: default_port(),
+            host: None,
+            uri: None,
+        }
     }
 }
 
 impl Default for AuthConfig {
     fn default() -> Self {
-        Self { secret: String::new() }
+        Self {
+            secret: String::new(),
+        }
     }
 }
 
 impl Default for ClipboardConfig {
     fn default() -> Self {
-        Self { debounce_ms: default_debounce_ms() }
+        Self {
+            debounce_ms: default_debounce_ms(),
+        }
     }
 }
 
@@ -69,6 +85,29 @@ impl ClipSyncConfig {
         } else {
             Ok(Self::default())
         }
+    }
+}
+
+impl ConnectionConfig {
+    pub fn direct_ws_uri(&self) -> Option<String> {
+        if let Some(uri) = non_empty(&self.uri) {
+            return Some(uri.to_string());
+        }
+
+        let host = non_empty(&self.host)?;
+        Some(format!("ws://{}:{}/ws", format_host(host), self.port))
+    }
+}
+
+fn non_empty(value: &Option<String>) -> Option<&str> {
+    value.as_deref().map(str::trim).filter(|s| !s.is_empty())
+}
+
+fn format_host(host: &str) -> String {
+    if host.contains(':') && !host.starts_with('[') {
+        format!("[{}]", host)
+    } else {
+        host.to_string()
     }
 }
 
@@ -111,5 +150,32 @@ secret = "only-secret"
         let cfg: ClipSyncConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(cfg.connection.port, 5287);
         assert_eq!(cfg.clipboard.debounce_ms, 300);
+    }
+
+    #[test]
+    fn test_direct_host_builds_ws_uri() {
+        let toml_str = r#"
+[connection]
+host = "192.168.0.103"
+"#;
+        let cfg: ClipSyncConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            cfg.connection.direct_ws_uri().as_deref(),
+            Some("ws://192.168.0.103:5287/ws")
+        );
+    }
+
+    #[test]
+    fn test_direct_uri_overrides_host() {
+        let toml_str = r#"
+[connection]
+host = "192.168.0.103"
+uri = "ws://10.0.0.5:5287/ws"
+"#;
+        let cfg: ClipSyncConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            cfg.connection.direct_ws_uri().as_deref(),
+            Some("ws://10.0.0.5:5287/ws")
+        );
     }
 }

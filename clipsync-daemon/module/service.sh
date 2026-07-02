@@ -6,5 +6,5 @@ while [ "$(getprop sys.boot_completed)" != "1" ]; do
 done
 
 if ! pidof clipsyncd > /dev/null 2>&1; then
-    /data/adb/modules/clipsyncd/clipsyncd &
+    /data/adb/modules/clipsyncd/system/bin/clipsyncd &
 fi

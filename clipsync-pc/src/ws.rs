@@ -5,9 +5,8 @@ use sha2::Sha256;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 
-pub type WebSocketStream = tokio_tungstenite::WebSocketStream<
-    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
->;
+pub type WebSocketStream =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 pub async fn connect_and_auth(uri: &str, secret: &str) -> anyhow::Result<WebSocketStream> {
     let _url: url::Url = uri.parse()?;

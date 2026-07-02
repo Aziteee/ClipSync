@@ -3,6 +3,8 @@ $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $service = Get-Content -Raw (Join-Path $root "module/service.sh")
+$daemonMain = Get-Content -Raw (Join-Path $root "clipsyncd.c")
+$zygiskMain = Get-Content -Raw (Join-Path $root "zygisk/jni/main.cpp")
 $wsServer = Get-Content -Raw (Join-Path $root "ws_server.c")
 $mdnsPublish = Get-Content -Raw (Join-Path $root "mdns_publish.c")
 
@@ -36,6 +38,22 @@ if ($mdnsPublish -notmatch "mg_mdns_listen") {
 
 if ($mdnsPublish -notmatch "_clipsync\._tcp") {
     throw "mdns_publish must advertise _clipsync._tcp"
+}
+
+if ($mdnsPublish -notmatch '"\\x11"\s+"auth=hmac-sha256"') {
+    throw "mdns DNS-SD TXT length for auth=hmac-sha256 must be 0x11"
+}
+
+if ($daemonMain -notmatch "poll_clipboard_change") {
+    throw "clipsyncd must poll Android clipboard changes for phone-to-PC sync"
+}
+
+if ($zygiskMain -match "com\.android\.shell") {
+    throw "Zygisk clipboard bridge runs as system_server and must not claim com.android.shell"
+}
+
+if ($zygiskMain -notmatch '"android"') {
+    throw "Zygisk clipboard bridge must use a package name owned by UID 1000"
 }
 
 Write-Host "daemon contract checks passed"

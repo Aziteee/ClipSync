@@ -1,5 +1,9 @@
 [connection]
 port = 5287
+# Optional fallback when mDNS multicast is blocked:
+# host = "192.168.0.103"
+# Or override the full endpoint:
+# uri = "ws://192.168.0.103:5287/ws"
 
 [auth]
 secret = "your-pre-shared-key-here"

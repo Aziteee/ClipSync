@@ -21,6 +21,16 @@ enum UiEvent {
     StateChanged(ConnState),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EndpointOrigin {
+    Direct,
+    Discovered,
+}
+
+fn should_retry_failed_endpoint(origin: EndpointOrigin) -> bool {
+    origin == EndpointOrigin::Direct
+}
+
 struct App {
     tray: Option<Tray>,
     proxy: EventLoopProxy<UiEvent>,
@@ -55,7 +65,8 @@ impl ApplicationHandler<UiEvent> for App {
         _event_loop: &ActiveEventLoop,
         _window_id: winit::window::WindowId,
         _event: winit::event::WindowEvent,
-    ) {}
+    ) {
+    }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UiEvent) {
         match event {
@@ -97,40 +108,55 @@ async fn run_sync_loop(
     let _ = proxy.send_event(UiEvent::StateChanged(ConnState::Disconnected));
 
     loop {
-        log::info!("State: Disconnected — starting mDNS discovery");
+        let (uri, origin) = if let Some(uri) = cfg.connection.direct_ws_uri() {
+            log::info!("State: Disconnected — using configured endpoint {}", uri);
+            (uri, EndpointOrigin::Direct)
+        } else {
+            log::info!("State: Disconnected — starting mDNS discovery");
 
-        let Ok(mut mdns_rx) = mdns::discover() else {
-            log::error!("mDNS discovery failed, retrying in 5s");
-            tokio::time::sleep(Duration::from_secs(5)).await;
-            continue;
-        };
+            let Ok(mut mdns_rx) = mdns::discover(cfg.connection.port) else {
+                log::error!("mDNS discovery failed, retrying in 5s");
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                continue;
+            };
 
-        let uri = loop {
-            tokio::select! {
-                Some(uri) = mdns_rx.recv() => break uri,
+            loop {
+                tokio::select! {
+                    Some(uri) = mdns_rx.recv() => break (uri, EndpointOrigin::Discovered),
                 Some(text) = clip_rx.recv() => {
+                    log::info!("Queued pending PC clipboard while disconnected: {} chars", text.chars().count());
                     engine.store_pending(text);
                 }
-                _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                    _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                }
             }
         };
 
         let _ = proxy.send_event(UiEvent::StateChanged(ConnState::Connecting));
 
-        let mut ws = loop {
+        let ws = loop {
             log::info!("Connecting to {}...", uri);
             match ws::connect_and_auth(&uri, &cfg.auth.secret).await {
                 Ok(ws) => {
                     log::info!("Connected and authenticated!");
-                    break ws;
+                    break Some(ws);
                 }
                 Err(e) => {
                     log::error!("Connection failed: {}", e);
+                    if !should_retry_failed_endpoint(origin) {
+                        log::info!("Discarding discovered endpoint and resuming discovery");
+                        break None;
+                    }
                     log::info!("Retrying in {}s...", backoff_secs);
                     tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
                     backoff_secs = (backoff_secs * 2).min(max_backoff);
                 }
             }
+        };
+        let Some(mut ws) = ws else {
+            let _ = proxy.send_event(UiEvent::StateChanged(ConnState::Disconnected));
+            backoff_secs = 1;
+            continue;
         };
         backoff_secs = 1;
 
@@ -138,7 +164,10 @@ async fn run_sync_loop(
 
         if let Some(pending_text) = engine.take_pending() {
             let msg = protocol::ClipMessage::set(pending_text);
-            let _ = ws::send(&mut ws, &msg).await;
+            match ws::send(&mut ws, &msg).await {
+                Ok(()) => log::info!("Sent pending clipboard_set"),
+                Err(e) => log::error!("Failed to send pending clipboard_set: {}", e),
+            }
         }
 
         let mut debounce_text: Option<String> = None;
@@ -147,6 +176,7 @@ async fn run_sync_loop(
         'connected: loop {
             tokio::select! {
                 Some(text) = clip_rx.recv() => {
+                    log::info!("Queued PC clipboard for debounce: {} chars", text.chars().count());
                     debounce_text = Some(text);
                     debounce_sleep.as_mut().reset(tokio::time::Instant::now() + debounce);
                 }
@@ -154,14 +184,19 @@ async fn run_sync_loop(
                     let text = debounce_text.take().unwrap();
                     if engine.should_send(&text) {
                         let msg = protocol::ClipMessage::set(text.clone());
-                        if ws::send(&mut ws, &msg).await.is_err() { break 'connected; }
+                        if let Err(e) = ws::send(&mut ws, &msg).await {
+                            log::error!("Failed to send clipboard_set: {}", e);
+                            break 'connected;
+                        }
+                        log::info!("Sent clipboard_set: {} chars", text.chars().count());
                         engine.mark_sent(&text);
                     }
                 }
                 result = ws::recv(&mut ws) => {
                     match result {
                         Ok(protocol::ClipMessage::Push { text, .. }) => {
-                            clip::write(&text);
+                            let ok = clip::write(&text);
+                            log::info!("Received clipboard_push: {} chars; PC clipboard write={}", text.chars().count(), ok);
                             engine.mark_sent(&text);
                         }
                         Ok(protocol::ClipMessage::Ping) => {
@@ -180,7 +215,7 @@ async fn run_sync_loop(
 }
 
 fn main() -> anyhow::Result<()> {
-    env_logger::init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let cfg = Arc::new(config::ClipSyncConfig::load("clipsync.toml")?);
     log::info!("ClipSync PC starting... port={}", cfg.connection.port);
@@ -202,4 +237,15 @@ fn main() -> anyhow::Result<()> {
     event_loop.run_app(&mut app)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discovered_endpoint_failure_returns_to_discovery() {
+        assert!(!should_retry_failed_endpoint(EndpointOrigin::Discovered));
+        assert!(should_retry_failed_endpoint(EndpointOrigin::Direct));
+    }
 }

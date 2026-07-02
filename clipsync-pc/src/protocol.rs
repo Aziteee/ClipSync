@@ -39,11 +39,17 @@ impl ClipMessage {
     }
 
     pub fn push(text: String) -> Self {
-        ClipMessage::Push { text, ts: now_millis() }
+        ClipMessage::Push {
+            text,
+            ts: now_millis(),
+        }
     }
 
     pub fn set(text: String) -> Self {
-        ClipMessage::Set { text, ts: now_millis() }
+        ClipMessage::Set {
+            text,
+            ts: now_millis(),
+        }
     }
 }
 
@@ -53,7 +59,10 @@ mod tests {
 
     #[test]
     fn test_push_roundtrip() {
-        let msg = ClipMessage::Push { text: "hello".into(), ts: 1719859200 };
+        let msg = ClipMessage::Push {
+            text: "hello".into(),
+            ts: 1719859200,
+        };
         let json = msg.to_json();
         let decoded = ClipMessage::from_json(&json).unwrap();
         match decoded {
@@ -67,7 +76,9 @@ mod tests {
 
     #[test]
     fn test_hello_roundtrip() {
-        let msg = ClipMessage::Hello { challenge: "abc123".into() };
+        let msg = ClipMessage::Hello {
+            challenge: "abc123".into(),
+        };
         let json = msg.to_json();
         let decoded = ClipMessage::from_json(&json).unwrap();
         match decoded {
@@ -88,7 +99,10 @@ mod tests {
 
     #[test]
     fn test_push_json_format() {
-        let msg = ClipMessage::Push { text: "test".into(), ts: 123 };
+        let msg = ClipMessage::Push {
+            text: "test".into(),
+            ts: 123,
+        };
         let json = msg.to_json();
         assert!(json.contains("\"type\":\"clipboard_push\""));
         assert!(json.contains("\"text\":\"test\""));

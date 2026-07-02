@@ -1,4 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::sync::mpsc;
 use windows::core::w;
 use windows::Win32::Foundation::*;
@@ -54,10 +56,7 @@ pub fn write(text: &str) -> bool {
         }
         let _ = EmptyClipboard();
 
-        let wide: Vec<u16> = text
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
+        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
         let byte_size = wide.len() * std::mem::size_of::<u16>();
         let hmem = match GlobalAlloc(GMEM_MOVEABLE, byte_size) {
             Ok(h) => h,
@@ -85,6 +84,28 @@ pub fn write(text: &str) -> bool {
     }
 }
 
+pub struct ClipDeduper {
+    last: Option<String>,
+}
+
+impl ClipDeduper {
+    pub fn new() -> Self {
+        Self { last: None }
+    }
+
+    pub fn with_initial(initial: Option<String>) -> Self {
+        Self { last: initial }
+    }
+
+    pub fn should_emit(&mut self, text: &str) -> bool {
+        if self.last.as_deref() == Some(text) {
+            return false;
+        }
+        self.last = Some(text.to_string());
+        true
+    }
+}
+
 pub struct ClipListener {
     tx: mpsc::UnboundedSender<String>,
 }
@@ -95,14 +116,15 @@ impl ClipListener {
     }
 
     pub fn spawn(self) {
-        std::thread::spawn(move || unsafe { message_loop(self.tx) });
+        let deduper = Arc::new(Mutex::new(ClipDeduper::with_initial(read())));
+        let poll_tx = self.tx.clone();
+        std::thread::spawn(move || poll_loop(poll_tx, deduper));
+        std::thread::spawn(move || unsafe { message_loop() });
     }
 }
 
-static mut TX_PTR: Option<mpsc::UnboundedSender<String>> = None;
-
-unsafe fn message_loop(tx: mpsc::UnboundedSender<String>) {
-    TX_PTR = Some(tx);
+unsafe fn message_loop() {
+    log::info!("Windows clipboard message listener starting");
 
     let hmodule: HMODULE = match GetModuleHandleW(None) {
         Ok(h) => h,
@@ -150,6 +172,7 @@ unsafe fn message_loop(tx: mpsc::UnboundedSender<String>) {
         log::error!("AddClipboardFormatListener failed");
         return;
     }
+    log::info!("Windows clipboard message listener ready");
 
     let mut msg = MSG::default();
     loop {
@@ -165,21 +188,43 @@ unsafe fn message_loop(tx: mpsc::UnboundedSender<String>) {
     let _ = DestroyWindow(hwnd);
 }
 
-unsafe extern "system" fn wndproc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-) -> LRESULT {
+fn poll_loop(tx: mpsc::UnboundedSender<String>, deduper: Arc<Mutex<ClipDeduper>>) {
+    log::info!("Windows clipboard polling fallback started");
+    loop {
+        std::thread::sleep(Duration::from_millis(500));
+        if SELF_WRITING.load(Ordering::SeqCst) {
+            continue;
+        }
+        if let Some(text) = read() {
+            emit_if_changed(&tx, &deduper, text, "poll");
+        }
+    }
+}
+
+fn emit_if_changed(
+    tx: &mpsc::UnboundedSender<String>,
+    deduper: &Arc<Mutex<ClipDeduper>>,
+    text: String,
+    source: &str,
+) {
+    let Ok(mut guard) = deduper.lock() else {
+        log::error!("clipboard deduper lock poisoned");
+        return;
+    };
+    if guard.should_emit(&text) {
+        log::info!(
+            "PC clipboard changed via {}: {} chars",
+            source,
+            text.chars().count()
+        );
+        let _ = tx.send(text);
+    }
+}
+
+unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_CLIPBOARDUPDATE => {
-            if !SELF_WRITING.load(Ordering::SeqCst) {
-                if let Some(ref tx) = TX_PTR {
-                    if let Some(text) = read() {
-                        let _ = tx.send(text);
-                    }
-                }
-            }
+            log::debug!("WM_CLIPBOARDUPDATE received");
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -193,9 +238,13 @@ unsafe extern "system" fn wndproc(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static CLIPBOARD_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_read_write_roundtrip() {
+        let _guard = CLIPBOARD_TEST_LOCK.lock().unwrap();
         let test_text = "ClipSync-test-hello";
         assert!(write(test_text));
         let read_back = read().unwrap();
@@ -204,7 +253,16 @@ mod tests {
 
     #[test]
     fn test_write_clears_self_writing_flag() {
+        let _guard = CLIPBOARD_TEST_LOCK.lock().unwrap();
         write("test");
         assert!(!is_self_writing());
+    }
+
+    #[test]
+    fn test_clip_deduper_emits_only_changed_text() {
+        let mut deduper = ClipDeduper::new();
+        assert!(deduper.should_emit("hello"));
+        assert!(!deduper.should_emit("hello"));
+        assert!(deduper.should_emit("world"));
     }
 }
