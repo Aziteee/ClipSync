@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use sync::SyncEngine;
 use tokio::sync::mpsc;
-use tokio::time::Sleep;
+use tokio::time::{Instant, Sleep};
 use tray::{ConnState, Tray, TrayAction};
 use winit::application::ApplicationHandler;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
@@ -33,6 +33,10 @@ enum EndpointOrigin {
 
 fn should_retry_failed_endpoint(origin: EndpointOrigin) -> bool {
     origin == EndpointOrigin::Direct
+}
+
+fn heartbeat_is_stale(idle_for: Duration, timeout: Duration) -> bool {
+    idle_for >= timeout
 }
 
 struct App {
@@ -120,6 +124,8 @@ async fn run_sync_loop(
 
     let mut engine = SyncEngine::new();
     let debounce = Duration::from_millis(cfg.clipboard.debounce_ms);
+    let heartbeat_interval = Duration::from_millis(cfg.connection.heartbeat_interval_ms);
+    let heartbeat_timeout = Duration::from_millis(cfg.connection.heartbeat_timeout_ms);
     let mut backoff_secs = 1u64;
     let max_backoff = 60u64;
 
@@ -192,6 +198,8 @@ async fn run_sync_loop(
 
         let mut debounce_text: Option<String> = None;
         let mut debounce_sleep: Pin<Box<Sleep>> = Box::pin(tokio::time::sleep(Duration::MAX));
+        let mut heartbeat_sleep: Pin<Box<Sleep>> = Box::pin(tokio::time::sleep(heartbeat_interval));
+        let mut last_ws_activity = Instant::now();
 
         'connected: loop {
             tokio::select! {
@@ -214,9 +222,22 @@ async fn run_sync_loop(
                         engine.mark_sent(&text);
                     }
                 }
+                _ = &mut heartbeat_sleep => {
+                    let idle_for = last_ws_activity.elapsed();
+                    if heartbeat_is_stale(idle_for, heartbeat_timeout) {
+                        log::warn!("WebSocket heartbeat timed out after {}ms idle", idle_for.as_millis());
+                        break 'connected;
+                    }
+                    if let Err(e) = ws::send(&mut ws, &protocol::ClipMessage::Ping).await {
+                        log::error!("Failed to send heartbeat ping: {}", e);
+                        break 'connected;
+                    }
+                    heartbeat_sleep.as_mut().reset(Instant::now() + heartbeat_interval);
+                }
                 result = ws::recv(&mut ws) => {
                     match result {
                         Ok(protocol::ClipMessage::Push { text, .. }) => {
+                            last_ws_activity = Instant::now();
                             if !paused.load(Ordering::Relaxed) {
                                 let ok = clip::write(&text);
                                 log::info!("Received clipboard_push: {} chars; PC clipboard write={}", text.chars().count(), ok);
@@ -224,9 +245,12 @@ async fn run_sync_loop(
                             }
                         }
                         Ok(protocol::ClipMessage::Ping) => {
+                            last_ws_activity = Instant::now();
                             let _ = ws::send(&mut ws, &protocol::ClipMessage::Pong).await;
                         }
-                        Ok(protocol::ClipMessage::Pong) => {}
+                        Ok(protocol::ClipMessage::Pong) => {
+                            last_ws_activity = Instant::now();
+                        }
                         Err(_) => break 'connected,
                         _ => {}
                     }
@@ -284,6 +308,18 @@ mod tests {
     #[test]
     fn tray_app_waits_for_events_instead_of_polling() {
         assert_eq!(tray_event_loop_control_flow(), ControlFlow::Wait);
+    }
+
+    #[test]
+    fn heartbeat_times_out_after_idle_deadline() {
+        assert!(!heartbeat_is_stale(
+            Duration::from_millis(14_999),
+            Duration::from_millis(15_000)
+        ));
+        assert!(heartbeat_is_stale(
+            Duration::from_millis(15_000),
+            Duration::from_millis(15_000)
+        ));
     }
 }
 

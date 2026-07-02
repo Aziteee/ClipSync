@@ -19,6 +19,10 @@ pub struct ConnectionConfig {
     pub host: Option<String>,
     #[serde(default)]
     pub uri: Option<String>,
+    #[serde(default = "default_heartbeat_interval_ms")]
+    pub heartbeat_interval_ms: u64,
+    #[serde(default = "default_heartbeat_timeout_ms")]
+    pub heartbeat_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +39,12 @@ pub struct ClipboardConfig {
 
 fn default_port() -> u16 {
     5287
+}
+fn default_heartbeat_interval_ms() -> u64 {
+    5_000
+}
+fn default_heartbeat_timeout_ms() -> u64 {
+    15_000
 }
 fn default_debounce_ms() -> u64 {
     300
@@ -56,6 +66,8 @@ impl Default for ConnectionConfig {
             port: default_port(),
             host: None,
             uri: None,
+            heartbeat_interval_ms: default_heartbeat_interval_ms(),
+            heartbeat_timeout_ms: default_heartbeat_timeout_ms(),
         }
     }
 }
@@ -120,6 +132,8 @@ mod tests {
         let cfg = ClipSyncConfig::default();
         assert_eq!(cfg.connection.port, 5287);
         assert_eq!(cfg.clipboard.debounce_ms, 300);
+        assert_eq!(cfg.connection.heartbeat_interval_ms, 5_000);
+        assert_eq!(cfg.connection.heartbeat_timeout_ms, 15_000);
         assert!(cfg.auth.secret.is_empty());
     }
 
