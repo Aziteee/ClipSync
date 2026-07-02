@@ -6,8 +6,8 @@
 #include <android/binder_parcel.h>
 #include <android/binder_status.h>
 
-#define TRANSACTION_GET_PRIMARY_CLIP  1
-#define TRANSACTION_SET_PRIMARY_CLIP  3
+#define TRANSACTION_GET_PRIMARY_CLIP  4
+#define TRANSACTION_SET_PRIMARY_CLIP  1
 
 static AIBinder* (*p_AServiceManager_getService)(const char*) = NULL;
 
@@ -25,193 +25,153 @@ static bool alloc_str(void *cookie, int32_t len, char **buf) {
     return true;
 }
 
-/* Write a minimal ClipData parcel for plain text */
-static void write_clip_data_plain_text(AParcel *dest, const char *label, const char *text) {
+static void write_clip_plain_text(AParcel *dest, const char *label, const char *text) {
     /* ClipDescription */
-    AParcel_writeString(dest, label, (int32_t)strlen(label));           /* mLabel */
-    /* mMimeTypes: String array with one element "text/plain" */
-    AParcel_writeInt32(dest, 1);                                         /* array length */
-    AParcel_writeString(dest, "text/plain", 10);                        /* mime type 0 */
-    AParcel_writeInt64(dest, 0LL);                                       /* mTimeStamp */
-    AParcel_writeInt32(dest, 0);                                         /* isStyledText=0 */
-
-    /* mIcon = null */
-    AParcel_writeInt32(dest, 0);
-
-    /* mItems: 1 item */
-    AParcel_writeInt32(dest, 1);                                         /* N items */
-
+    AParcel_writeInt32(dest, 0);  /* TextUtils type=plain */
+    AParcel_writeString(dest, label, (int32_t)strlen(label));
+    AParcel_writeInt32(dest, 1);  /* mimeTypes count */
+    AParcel_writeString(dest, "text/plain", 10);
+    AParcel_writeInt32(dest, 0);  /* extras: empty PersistableBundle */
+    AParcel_writeInt64(dest, 0LL);/* mTimeStamp */
+    AParcel_writeInt32(dest, 0);  /* isStyledText */
+    AParcel_writeInt32(dest, 2);  /* classificationStatus=NOT_PERFORMED */
+    AParcel_writeInt32(dest, -1); /* confidenceBundle=null */
+    /* ClipData header */
+    AParcel_writeInt32(dest, 0);  /* hasIcon=0 */
+    AParcel_writeInt32(dest, 1);  /* N items */
     /* Item[0] */
-    if (text && text[0]) {
-        AParcel_writeInt32(dest, 1);                                     /* hasText=1 */
+    AParcel_writeInt32(dest, 0);  /* TextUtils type=plain */
+    if (text && text[0])
         AParcel_writeString(dest, text, (int32_t)strlen(text));
-    } else {
-        AParcel_writeInt32(dest, 0);                                     /* hasText=0 */
-    }
-    AParcel_writeString(dest, "", 0);                                    /* htmlText (null) */
-    AParcel_writeInt32(dest, 0);                                         /* hasIntent=0 */
-    AParcel_writeInt32(dest, 0);                                         /* hasUri=0 */
-    AParcel_writeInt32(dest, 0);                                         /* hasActivityInfo=0 (for newer API) */
+    else
+        AParcel_writeString(dest, NULL, 0);
+    AParcel_writeInt32(dest, -1); /* htmlText=null (String8) */
+    AParcel_writeInt32(dest, 0);  /* hasIntent=0 */
+    AParcel_writeInt32(dest, 0);  /* hasIntentSender=0 */
+    AParcel_writeInt32(dest, 0);  /* hasUri=0 */
+    AParcel_writeInt32(dest, 0);  /* hasActivityInfo=0 */
+    AParcel_writeInt32(dest, 0);  /* hasTextLinks=0 */
 }
 
-/* Read a ClipData and extract the text from the first item */
-static char *read_clip_data_text(AParcel *parcel) {
-    /* ClipDescription */
-    char *label = NULL;
-    AParcel_readString(parcel, &label, alloc_str);                     /* mLabel */
-    if (label) { free(label); label = NULL; }
-
-    int32_t mimeCount = 0;
-    AParcel_readInt32(parcel, &mimeCount);                             /* mimeTypes array length */
-    for (int32_t i = 0; i < mimeCount; i++) {
-        char *mt = NULL;
-        AParcel_readString(parcel, &mt, alloc_str);
-        if (mt) free(mt);
-    }
-    int64_t ts = 0;
-    AParcel_readInt64(parcel, &ts);                                     /* mTimeStamp */
-    int32_t isStyled = 0;
-    AParcel_readInt32(parcel, &isStyled);                               /* isStyledText */
-
-    /* mIcon */
-    int32_t hasIcon = 0;
-    AParcel_readInt32(parcel, &hasIcon);
-    if (hasIcon) {
-        /* Skip Bitmap — too complex, shouldn't happen for plain text */
-        printf("WARNING: icon present, skipping may corrupt data\n");
-    }
-
-    /* mItems */
-    int32_t numItems = 0;
-    AParcel_readInt32(parcel, &numItems);
-
+static char *read_clip_plain_text(AParcel *parcel) {
+    int32_t dummy;
+    AParcel_readInt32(parcel, &dummy); if (dummy == 0) { char *s=NULL; AParcel_readString(parcel,&s,alloc_str); if(s)free(s); }
+    int32_t mc; AParcel_readInt32(parcel,&mc);
+    for(int32_t i=0;i<mc;i++){ char *s=NULL; AParcel_readString(parcel,&s,alloc_str); if(s)free(s); }
+    int32_t ec; AParcel_readInt32(parcel,&ec);
+    for(int32_t i=0;i<ec;i++){ char *s=NULL; AParcel_readString(parcel,&s,alloc_str); if(s)free(s); AParcel_readInt32(parcel,&dummy); }
+    int64_t ts; AParcel_readInt64(parcel,&ts);
+    AParcel_readInt32(parcel,&dummy);
+    AParcel_readInt32(parcel,&dummy);
+    int32_t cb; AParcel_readInt32(parcel,&cb);
+    if(cb>0){ for(int32_t i=0;i<cb;i++){ char *s=NULL; AParcel_readString(parcel,&s,alloc_str); if(s)free(s); AParcel_readInt32(parcel,&dummy); }}
+    int32_t hi; AParcel_readInt32(parcel,&hi); if(hi)return NULL;
+    int32_t ni; AParcel_readInt32(parcel,&ni);
     char *result = NULL;
-    for (int32_t i = 0; i < numItems; i++) {
-        int32_t hasText = 0;
-        AParcel_readInt32(parcel, &hasText);
-        if (hasText) {
-            char *txt = NULL;
-            AParcel_readString(parcel, &txt, alloc_str);
-            if (txt && !result) {
-                result = strdup(txt);
-            }
-            if (txt) free(txt);
-        }
-        /* htmlText */
-        char *html = NULL;
-        AParcel_readString(parcel, &html, alloc_str);
-        if (html) free(html);
-
-        int32_t hasIntent = 0;
-        AParcel_readInt32(parcel, &hasIntent);
-        if (hasIntent) {
-            /* Skip Intent — complex */
-        }
-        int32_t hasUri = 0;
-        AParcel_readInt32(parcel, &hasUri);
-        if (hasUri) {
-            /* Skip Uri */
-        }
-        /* mActivityInfo (API 35+) */
-        int32_t hasAi = 0;
-        AParcel_readInt32(parcel, &hasAi);
-        if (hasAi) {
-            /* Skip ActivityInfo */
-        }
+    for(int32_t i=0;i<ni;i++) {
+        int32_t tt; AParcel_readInt32(parcel,&tt);
+        if(tt==0){ char *t=NULL; AParcel_readString(parcel,&t,alloc_str); if(t&&!result)result=strdup(t); if(t)free(t); }
+        int32_t hl; AParcel_readInt32(parcel,&hl);
+        if(hl>0){ char *s=NULL; AParcel_readString(parcel,&s,alloc_str); if(s)free(s); }
+        for(int j=0;j<5;j++){ int32_t ho; AParcel_readInt32(parcel,&ho); if(ho)return result; }
     }
-    return result;
-}
-
-static char *get_clipboard_text(AIBinder *svc) {
-    AParcel *data = NULL;
-    if (AIBinder_prepareTransaction(svc, &data) != STATUS_OK) return NULL;
-    AParcel_writeString(data, "com.android.shell", 18);
-    AParcel_writeInt32(data, 0);
-    AParcel_writeInt32(data, 0);
-
-    AParcel *reply = NULL;
-    binder_status_t status = AIBinder_transact(svc, TRANSACTION_GET_PRIMARY_CLIP, &data, &reply, 0);
-    printf("getPrimaryClip status: %d\n", status);
-
-    char *result = NULL;
-    if (status == STATUS_OK && reply) {
-        /* Try without exception code — some AIDL versions put return value directly */
-        result = read_clip_data_text(reply);
-        if (result) {
-            printf("  read OK (direct)\n");
-        }
-    }
-
-    if (data) AParcel_delete(data);
-    if (reply) AParcel_delete(reply);
     return result;
 }
 
 int main(void) {
     void *h = dlopen("libbinder_ndk.so", RTLD_NOW);
     if (!h) { fprintf(stderr, "dlopen fail\n"); return 1; }
-
     p_AServiceManager_getService = dlsym(h, "AServiceManager_getService");
     if (!p_AServiceManager_getService) { fprintf(stderr, "dlsym fail\n"); return 1; }
-
     AIBinder *svc = p_AServiceManager_getService("clipboard");
     if (!svc) { fprintf(stderr, "getService fail\n"); return 1; }
-
     AIBinder_Class *cls = AIBinder_Class_define("android.content.IClipboard",
         proxy_onCreate, proxy_onDestroy, proxy_onTransact);
     if (!cls) { fprintf(stderr, "Class_define fail\n"); return 1; }
     AIBinder_Class_disableInterfaceTokenHeader(cls);
-    if (!AIBinder_associateClass(svc, cls)) { fprintf(stderr, "associateClass fail\n"); return 1; }
-    printf("Ready (no header)\n\n");
+    AIBinder_associateClass(svc, cls);
+    printf("Ready (no token)\n\n");
 
-    /* Write: verify by long-pressing in any text field on phone */
-    const char *test_text = "Hello from ClipSync Binder! 你好世界";
-    printf("Writing: '%s'\n", test_text);
-
-    AParcel *wdata = NULL;
-    AIBinder_prepareTransaction(svc, &wdata);
-    write_clip_data_plain_text(wdata, "ClipSync", test_text);  /* ClipData FIRST */
-    AParcel_writeString(wdata, "com.android.shell", 18);        /* callingPackage */
-    AParcel_writeString(wdata, NULL, 0);                        /* attributionTag (null) */
-    AParcel_writeInt32(wdata, 0);                               /* userId */
-    AParcel_writeInt32(wdata, 0);                               /* deviceId */
-
-    AParcel *wr = NULL;
-    binder_status_t ws = AIBinder_transact(svc, TRANSACTION_SET_PRIMARY_CLIP, &wdata, &wr, 0 /* no ONEWAY */);
-    printf("Write status: %d %s\n", ws, ws == STATUS_OK ? "OK" : "FAIL");
-    if (wdata) AParcel_delete(wdata);
-    if (wr) AParcel_delete(wr);
-
-    /* Read back */
-    AParcel *rdata = NULL;
-    AIBinder_prepareTransaction(svc, &rdata);
-    AParcel_writeString(rdata, "com.android.shell", 18);
-    AParcel_writeString(rdata, "", 0);    /* attributionTag — REQUIRED on Android 12+ */
-    AParcel_writeInt32(rdata, 0);
-    AParcel_writeInt32(rdata, 0);
-
-    AParcel *rreply = NULL;
-    ws = AIBinder_transact(svc, TRANSACTION_GET_PRIMARY_CLIP, &rdata, &rreply, 0);
-    printf("Read status: %d %s\n", ws, ws == STATUS_OK ? "OK" : "FAIL");
-
-    if (ws == STATUS_OK && rreply) {
-        /* AIDL getPrimaryClip: hasResult(int) + ClipData if present */
-        int32_t hasResult = 0;
-        AParcel_readInt32(rreply, &hasResult);
-        printf("Has result: %d\n", hasResult);
-
-        if (hasResult == 1) {
-            char *txt = read_clip_data_text(rreply);
-            if (txt) { printf("Text: [%s]\n", txt); free(txt); }
-            else { printf("Failed to parse ClipData\n"); }
-        } else {
-            printf("Clipboard empty or error (code=%d)\n", hasResult);
+    /* Test hasPrimaryClip (code 6) — basic permission check */
+    {
+        AParcel *d = NULL;
+        AIBinder_prepareTransaction(svc, &d);
+        AParcel_writeString(d, "com.android.shell", 18);
+        AParcel_writeString(d, NULL, 0);
+        AParcel_writeInt32(d, 0); AParcel_writeInt32(d, 0);
+        AParcel *r = NULL;
+        int s = AIBinder_transact(svc, 6 /* hasPrimaryClip */, &d, &r, 0);
+        printf("hasPrimaryClip status=%d ", s);
+        if (s == STATUS_OK && r) {
+            int32_t exc = 0;
+            AParcel_readInt32(r, &exc);
+            printf("exc=%d ", exc);
+            if (exc == 0) {
+                int32_t hasResult = 0;
+                AParcel_readInt32(r, &hasResult);
+                printf("hasResult=%d ", hasResult);
+                int32_t val = 0;
+                AParcel_readInt32(r, &val);
+                printf("val=%d\n", val);
+            } else { printf("\n"); }
         }
+        if (d) AParcel_delete(d); if (r) AParcel_delete(r);
     }
 
-    if (rdata) AParcel_delete(rdata);
-    if (rreply) AParcel_delete(rreply);
+    /* Read */
+    {   AParcel *d = NULL;
+        AIBinder_prepareTransaction(svc, &d);
+        AParcel_writeString(d, "com.android.shell", 18);
+        AParcel_writeString(d, NULL, 0);
+        AParcel_writeInt32(d, 0); AParcel_writeInt32(d, 0);
+        AParcel *r = NULL;
+        int s = AIBinder_transact(svc, TRANSACTION_GET_PRIMARY_CLIP, &d, &r, 0);
+        printf("Read status: %d\n", s);
+        if (s == STATUS_OK && r) {
+            int32_t hr; AParcel_readInt32(r, &hr);
+            printf("Has result: %d\n", hr);
+            if (hr == 1) {
+                char *t = read_clip_plain_text(r);
+                if (t) { printf("CLIPBOARD: [%s]\n", t); free(t); }
+                else printf("Parse failed\n");
+            }
+        }
+        if (d) AParcel_delete(d); if (r) AParcel_delete(r);
+    }
 
-    printf("\nNow try pasting on phone...\n");
+    /* Write */
+    const char *test = "ClipSync Binder OK! 你好";
+    printf("Write: '%s'\n", test);
+    {   AParcel *d = NULL;
+        AIBinder_prepareTransaction(svc, &d);
+        write_clip_plain_text(d, "ClipSync", test);
+        AParcel_writeString(d, "com.android.shell", 18);
+        AParcel_writeString(d, NULL, 0);
+        AParcel_writeInt32(d, 0); AParcel_writeInt32(d, 0);
+        AParcel *r = NULL;
+        int s = AIBinder_transact(svc, TRANSACTION_SET_PRIMARY_CLIP, &d, &r, FLAG_ONEWAY);
+        printf("Write status: %d\n", s);
+        if (d) AParcel_delete(d); if (r) AParcel_delete(r);
+    }
+
+    /* Read back */
+    printf("Read back:\n");
+    {   AParcel *d = NULL;
+        AIBinder_prepareTransaction(svc, &d);
+        AParcel_writeString(d, "com.android.shell", 18);
+        AParcel_writeString(d, NULL, 0);
+        AParcel_writeInt32(d, 0); AParcel_writeInt32(d, 0);
+        AParcel *r = NULL;
+        int s = AIBinder_transact(svc, TRANSACTION_GET_PRIMARY_CLIP, &d, &r, 0);
+        if (s == STATUS_OK && r) {
+            int32_t hr; AParcel_readInt32(r, &hr);
+            if (hr == 1) {
+                char *t = read_clip_plain_text(r);
+                if (t) { printf("Result: [%s]\n", t); free(t); }
+                else printf("Parse failed\n");
+            } else { printf("HasResult=%d\n", hr); }
+        } else { printf("Read failed: %d\n", s); }
+        if (d) AParcel_delete(d); if (r) AParcel_delete(r);
+    }
     return 0;
 }

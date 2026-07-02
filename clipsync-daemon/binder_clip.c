@@ -10,10 +10,23 @@
 /* Runtime-resolved: linked from system libbinder_ndk.so */
 static AIBinder* (*p_AServiceManager_getService)(const char* instance) = NULL;
 
-/* Transaction codes (from AIDL) */
-#define TRANSACTION_GET_PRIMARY_CLIP           1
-#define TRANSACTION_SET_PRIMARY_CLIP           3
-#define TRANSACTION_ADD_PRIMARY_CLIP_CHANGED_LISTENER 4
+/* Transaction codes — API 36 IClipboard.aidl method order:
+ *   0: setPrimaryClip             = 1
+ *   1: setPrimaryClipAsPackage    = 2
+ *   2: clearPrimaryClip           = 3
+ *   3: getPrimaryClip             = 4
+ *   4: getPrimaryClipDescription  = 5
+ *   5: hasPrimaryClip             = 6
+ *   6: addPrimaryClipChangedListener = 7
+ *   7: removePrimaryClipChangedListener = 8
+ *   8: hasClipboardText           = 9
+ *   9: getPrimaryClipSource       = 10
+ *  10: areClipboard...Enabled     = 11
+ *  11: setClipboard...Enabled     = 12
+ */
+#define TRANSACTION_GET_PRIMARY_CLIP           4
+#define TRANSACTION_SET_PRIMARY_CLIP           1
+#define TRANSACTION_ADD_PRIMARY_CLIP_CHANGED_LISTENER 7
 
 /* IOnPrimaryClipChangedListener transaction */
 #define TRANSACTION_DISPATCH_CLIP_CHANGED      1
@@ -160,7 +173,7 @@ int binder_clip_init(void) {
     return 0;
 }
 
-/* --- ClipData parcel helpers --- */
+/* --- ClipData parcel helpers — API 36 (AOSP master) format --- */
 
 static bool string_alloc(void *cookie, int32_t len, char **buf) {
     if (len <= 0) return false;
@@ -171,90 +184,168 @@ static bool string_alloc(void *cookie, int32_t len, char **buf) {
     return true;
 }
 
-/* Write minimal ClipData for plain text: ClipDescription + 1 text Item */
+/* Write minimal ClipData for plain text.
+ * Format matches AOSP master ClipData.writeToParcel:
+ *   ClipDescription + hasIcon(0) + itemCount(1) + Item[0]
+ */
 static void write_clip_plain_text(AParcel *dest, const char *label, const char *text) {
-    /* ClipDescription */
-    AParcel_writeString(dest, label, (int32_t)strlen(label)); /* mLabel */
-    AParcel_writeInt32(dest, 1);                              /* mMimeTypes count = 1 */
-    AParcel_writeString(dest, "text/plain", 10);              /* mMimeTypes[0] */
-    AParcel_writeInt64(dest, 0LL);                            /* mTimeStamp */
-    AParcel_writeInt32(dest, 0);                              /* isStyledText */
-    /* mIcon = null */
+    /* ===== ClipDescription ===== */
+    /* 1. TextUtils.writeToParcel(mLabel) — type=0(plain) + String16 */
     AParcel_writeInt32(dest, 0);
-    /* mItems count = 1 */
+    AParcel_writeString(dest, label ? label : "", label ? (int32_t)strlen(label) : 0);
+
+    /* 2. writeStringList(mMimeTypes) — count + String16 items */
+    AParcel_writeInt32(dest, 1);                              /* count = 1 */
+    AParcel_writeString(dest, "text/plain", 10);
+
+    /* 3. writePersistableBundle(mExtras) — empty: count=0 */
+    AParcel_writeInt32(dest, 0);
+
+    /* 4. writeLong(mTimeStamp) */
+    AParcel_writeInt64(dest, 0LL);
+
+    /* 5. writeBoolean(mIsStyledText) → writeInt */
+    AParcel_writeInt32(dest, 0);
+
+    /* 6. writeInt(mClassificationStatus) = CLASSIFICATION_NOT_PERFORMED=2 */
+    AParcel_writeInt32(dest, 2);
+
+    /* 7. writeBundle(confidencesToBundle()) — null Bundle */
+    AParcel_writeInt32(dest, -1);
+
+    /* ===== ClipData header ===== */
+    /* hasIcon */
+    AParcel_writeInt32(dest, 0);
+
+    /* mItems count */
     AParcel_writeInt32(dest, 1);
-    /* Item[0] */
+
+    /* ===== Item[0] ===== */
+    /* 1. TextUtils.writeToParcel(mText) — type=0(plain) + String16 */
     if (text && text[0]) {
-        AParcel_writeInt32(dest, 1);                          /* hasText=1 */
+        AParcel_writeInt32(dest, 0);
         AParcel_writeString(dest, text, (int32_t)strlen(text));
     } else {
-        AParcel_writeInt32(dest, 0);                          /* hasText=0 */
+        AParcel_writeInt32(dest, 0);
+        AParcel_writeString(dest, NULL, 0);
     }
-    AParcel_writeString(dest, NULL, 0);                       /* htmlText (null) */
-    AParcel_writeInt32(dest, 0);                              /* hasIntent=0 */
-    /* hasIntentSender — API 35+ field, write 0 */
+
+    /* 2. writeString8(mHtmlText) — -1 for null (delegates to String16) */
+    AParcel_writeInt32(dest, -1);
+
+    /* 3. writeTypedObject(mIntent) — 0 = null */
     AParcel_writeInt32(dest, 0);
-    AParcel_writeInt32(dest, 0);                              /* hasUri=0 */
-    AParcel_writeInt32(dest, 0);                              /* hasActivityInfo=0 */
+
+    /* 4. writeTypedObject(mIntentSender) — 0 = null (API 34+) */
+    AParcel_writeInt32(dest, 0);
+
+    /* 5. writeTypedObject(mUri) — 0 = null */
+    AParcel_writeInt32(dest, 0);
+
+    /* 6. writeTypedObject(mActivityInfo) — 0 = null (conditional, mostly false) */
+    AParcel_writeInt32(dest, 0);
+
+    /* 7. writeTypedObject(mTextLinks) — 0 = null (API 34+) */
+    AParcel_writeInt32(dest, 0);
 }
 
-/* Read ClipData from parcel, extract text from first item */
+/* Read ClipData from reply parcel, extract text from first item.
+ * Skips non-text fields; returns NULL on format errors.
+ */
 static char *read_clip_plain_text(AParcel *parcel) {
-    char *label = NULL;
-    AParcel_readString(parcel, &label, string_alloc);         /* mLabel */
-    if (label) { free(label); label = NULL; }
+    /* ===== ClipDescription ===== */
+    /* 1. TextUtils → read type flag */
+    int32_t labelType = 0;
+    AParcel_readInt32(parcel, &labelType);
+    if (labelType == 0) {
+        char *lbl = NULL;
+        AParcel_readString(parcel, &lbl, string_alloc);  /* skip */
+        if (lbl) free(lbl);
+    }
+    /* else Spanned — complex, skip (we only care about the Item text) */
 
+    /* 2. mMimeTypes: count + strings */
     int32_t mimeCount = 0;
-    AParcel_readInt32(parcel, &mimeCount);                    /* mMimeTypes count */
+    AParcel_readInt32(parcel, &mimeCount);
     for (int32_t i = 0; i < mimeCount; i++) {
         char *mt = NULL;
         AParcel_readString(parcel, &mt, string_alloc);
         if (mt) free(mt);
     }
-    int64_t ts = 0;
-    AParcel_readInt64(parcel, &ts);                           /* mTimeStamp */
-    int32_t isStyled = 0;
-    AParcel_readInt32(parcel, &isStyled);                     /* isStyledText */
 
-    /* mIcon */
+    /* 3. PersistableBundle: count, then key-value pairs */
+    int32_t extrasCount = 0;
+    AParcel_readInt32(parcel, &extrasCount);
+    for (int32_t i = 0; i < extrasCount; i++) {
+        char *key = NULL;
+        AParcel_readString(parcel, &key, string_alloc);
+        if (key) free(key);
+        /* skip value — depends on type, just skip 4 bytes */
+        int32_t dummy = 0;
+        AParcel_readInt32(parcel, &dummy);
+    }
+
+    /* 4. mTimeStamp */
+    int64_t ts = 0;
+    AParcel_readInt64(parcel, &ts);
+
+    /* 5. mIsStyledText (boolean → int32) */
+    int32_t isStyled = 0;
+    AParcel_readInt32(parcel, &isStyled);
+
+    /* 6. mClassificationStatus */
+    int32_t classStatus = 0;
+    AParcel_readInt32(parcel, &classStatus);
+
+    /* 7. confidenceBundle: -1=null, 0=empty, N=count */
+    int32_t confBundle = 0;
+    AParcel_readInt32(parcel, &confBundle);
+    if (confBundle > 0) {
+        for (int32_t i = 0; i < confBundle; i++) {
+            char *ck = NULL;
+            AParcel_readString(parcel, &ck, string_alloc);
+            if (ck) free(ck);
+            int32_t dv = 0;
+            AParcel_readInt32(parcel, &dv);  /* skip float value */
+        }
+    }
+
+    /* ===== ClipData header ===== */
     int32_t hasIcon = 0;
     AParcel_readInt32(parcel, &hasIcon);
-    if (hasIcon) return NULL; /* bitmap too complex to skip */
+    if (hasIcon) return NULL;  /* can't skip Bitmap */
 
-    /* mItems */
     int32_t numItems = 0;
     AParcel_readInt32(parcel, &numItems);
 
     char *result = NULL;
     for (int32_t i = 0; i < numItems; i++) {
-        int32_t hasText = 0;
-        AParcel_readInt32(parcel, &hasText);
-        if (hasText) {
+        /* 1. TextUtils → CharSequence mText */
+        int32_t textType = 0;
+        AParcel_readInt32(parcel, &textType);
+        if (textType == 0) {
             char *txt = NULL;
             AParcel_readString(parcel, &txt, string_alloc);
             if (txt && !result) result = strdup(txt);
             if (txt) free(txt);
+        } /* else Spanned — too complex */
+
+        /* 2. writeString8(mHtmlText) — reads -1 or length+bytes */
+        int32_t htmlLen = 0;
+        AParcel_readInt32(parcel, &htmlLen);
+        if (htmlLen > 0) {
+            /* skip htmlText bytes */
+            char *hd = NULL;
+            AParcel_readString(parcel, &hd, string_alloc); /* String8 wrapper → try String16 read */
+            if (hd) free(hd);
         }
-        /* htmlText */
-        char *html = NULL;
-        AParcel_readString(parcel, &html, string_alloc);
-        if (html) free(html);
-        /* hasIntent */
-        int32_t hasIntent = 0;
-        AParcel_readInt32(parcel, &hasIntent);
-        if (hasIntent) return result; /* can't skip Intent */
-        /* hasIntentSender — API 35+ */
-        int32_t hasIS = 0;
-        AParcel_readInt32(parcel, &hasIS);
-        if (hasIS) return result; /* can't skip */
-        /* hasUri */
-        int32_t hasUri = 0;
-        AParcel_readInt32(parcel, &hasUri);
-        if (hasUri) return result; /* can't skip Uri */
-        /* hasActivityInfo */
-        int32_t hasAI = 0;
-        AParcel_readInt32(parcel, &hasAI);
-        if (hasAI) return result;
+
+        /* 3-7: writeTypedObject — each writes int32 0/1 + object */
+        for (int j = 0; j < 5; j++) {
+            int32_t hasObj = 0;
+            AParcel_readInt32(parcel, &hasObj);
+            if (hasObj) return result;  /* can't skip complex objects */
+        }
     }
     return result;
 }
