@@ -165,13 +165,33 @@ public:
     void onLoad(Api *api, JNIEnv *env) override {
         (void)api;
         g_env = env;
-    }
-    void preServerSpecialize(ServerSpecializeArgs *args) override {
-        (void)args;
-        // Non-blocking: spawn a thread that retries socket bind
-        pthread_t t;
-        pthread_create(&t, nullptr, socket_thread, nullptr);
-        pthread_detach(t);
+        LOGD("onLoad called");
+
+        /* Detect system_server via JNI — ActivityThread.currentProcessName() */
+        jclass at = env->FindClass("android/app/ActivityThread");
+        if (!at) { LOGD("ActivityThread class not found"); return; }
+        jmethodID cpn = env->GetStaticMethodID(at, "currentProcessName", "()Ljava/lang/String;");
+        if (!cpn) {
+            /* Try currentOpPackageName */
+            cpn = env->GetStaticMethodID(at, "currentOpPackageName", "()Ljava/lang/String;");
+        }
+        if (!cpn) { LOGD("currentProcessName not found"); env->DeleteLocalRef(at); return; }
+        jstring name = (jstring)env->CallStaticObjectMethod(at, cpn);
+        if (!name) { LOGD("currentProcessName returned null"); env->DeleteLocalRef(at); return; }
+        const char *s = env->GetStringUTFChars(name, nullptr);
+        LOGD("process name: %s", s ? s : "(null)");
+
+        int is_ss = s && strcmp(s, "system_server") == 0;
+        if (s) env->ReleaseStringUTFChars(name, s);
+        env->DeleteLocalRef(name);
+        env->DeleteLocalRef(at);
+
+        if (is_ss) {
+            LOGD("detected system_server, starting bridge socket");
+            pthread_t t;
+            pthread_create(&t, nullptr, socket_thread, nullptr);
+            pthread_detach(t);
+        }
     }
 };
 
