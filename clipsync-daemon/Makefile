@@ -51,7 +51,7 @@ module: $(TARGET) $(ZYGISK_SO)
 	@echo   adb reboot
 	@echo Check: adb logcat -s ClipSyncBridge clipsyncd
 
-.PHONY: all clean install module test
+.PHONY: all clean install module test test-crypto
 
 test: $(BUILD_DIR)/test_clip
 	adb push $(BUILD_DIR)/test_clip /data/local/tmp/
@@ -59,3 +59,10 @@ test: $(BUILD_DIR)/test_clip
 
 $(BUILD_DIR)/test_clip: test_clip.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+$(BUILD_DIR)/test_crypto_hmac: test_crypto_hmac.c crypto_hmac.c crypto_hmac.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ test_crypto_hmac.c crypto_hmac.c
+
+test-crypto: $(BUILD_DIR)/test_crypto_hmac
+	adb push $(BUILD_DIR)/test_crypto_hmac /data/local/tmp/
+	adb shell su -c "chmod 755 /data/local/tmp/test_crypto_hmac && /data/local/tmp/test_crypto_hmac"
