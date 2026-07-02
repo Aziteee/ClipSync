@@ -169,9 +169,7 @@ public:
     }
     void preServerSpecialize(ServerSpecializeArgs *args) override {
         (void)args;
-        LOGD("preServerSpecialize — starting bridge socket in 1s");
-        // Brief delay to ensure servicemanager is ready
-        usleep(1000000);
+        // Non-blocking: spawn a thread that retries socket bind
         pthread_t t;
         pthread_create(&t, nullptr, socket_thread, nullptr);
         pthread_detach(t);

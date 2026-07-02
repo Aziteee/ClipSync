@@ -1,4 +1,4 @@
-/* ClipSync â€?clipboard access via Unix socket to Zygisk bridge
+/* ClipSync ï¿½?clipboard access via Unix socket to Zygisk bridge
  *
  * The Zygisk module creates a Unix socket at /dev/socket/clipbridge
  * Protocol: send "READ\n", "WRITE text\n", "HAS\n"; receive "text\n", "OK\n", "1\n"/"0\n"
@@ -40,14 +40,20 @@ static char *sock_command(const char *cmd) {
 }
 
 int binder_clip_init(void) {
-    int fd = sock_connect();
-    if (fd < 0) {
-        fprintf(stderr, "[binder_clip] cannot connect to %s (Zygisk module not loaded?)\n", SOCK_PATH);
-        return -1;
+    /* Retry with backoff â€” system_server may not be ready yet at boot */
+    for (int attempt = 0; attempt < 10; attempt++) {
+        int fd = sock_connect();
+        if (fd >= 0) {
+            close(fd);
+            printf("[binder_clip] connected to clipboard bridge (attempt %d)\n", attempt + 1);
+            return 0;
+        }
+        if (attempt < 9) {
+            sleep(1);
+        }
     }
-    close(fd);
-    printf("[binder_clip] connected to clipboard bridge\n");
-    return 0;
+    fprintf(stderr, "[binder_clip] cannot connect to %s after 10 attempts\n", SOCK_PATH);
+    return -1;
 }
 
 char *binder_clip_get_text(void) {
@@ -71,5 +77,5 @@ int binder_clip_set_text(const char *text) {
 
 void binder_clip_set_callback(clip_change_cb cb) {
     (void)cb;
-    printf("[binder_clip] callback registered (no listener â€?poll mode)\n");
+    printf("[binder_clip] callback registered (no listener ï¿½?poll mode)\n");
 }
