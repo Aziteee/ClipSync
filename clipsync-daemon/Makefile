@@ -51,7 +51,7 @@ module: $(TARGET) $(ZYGISK_SO)
 	@echo   adb reboot
 	@echo Check: adb logcat -s ClipSyncBridge clipsyncd
 
-.PHONY: all clean install module test test-crypto
+.PHONY: all clean install module test test-crypto test-json
 
 test: $(BUILD_DIR)/test_clip
 	adb push $(BUILD_DIR)/test_clip /data/local/tmp/
@@ -66,3 +66,10 @@ $(BUILD_DIR)/test_crypto_hmac: test_crypto_hmac.c crypto_hmac.c crypto_hmac.h | 
 test-crypto: $(BUILD_DIR)/test_crypto_hmac
 	adb push $(BUILD_DIR)/test_crypto_hmac /data/local/tmp/
 	adb shell su -c "chmod 755 /data/local/tmp/test_crypto_hmac && /data/local/tmp/test_crypto_hmac"
+
+$(BUILD_DIR)/test_protocol_json: test_protocol_json.c protocol_json.c protocol_json.h third_party/mongoose/mongoose.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ test_protocol_json.c protocol_json.c third_party/mongoose/mongoose.c
+
+test-json: $(BUILD_DIR)/test_protocol_json
+	adb push $(BUILD_DIR)/test_protocol_json /data/local/tmp/
+	adb shell su -c "chmod 755 /data/local/tmp/test_protocol_json && /data/local/tmp/test_protocol_json"
