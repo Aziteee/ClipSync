@@ -1,9 +1,9 @@
-use std::sync::mpsc;
+use crate::UiEvent;
 use tray_icon::{
     menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     Icon, TrayIcon, TrayIconBuilder,
 };
-use winit::event_loop::ActiveEventLoop;
+use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnState {
@@ -12,7 +12,7 @@ pub enum ConnState {
     Connected,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrayAction {
     Reconnect,
     TogglePause,
@@ -21,7 +21,6 @@ pub enum TrayAction {
 
 pub struct Tray {
     tray_icon: TrayIcon,
-    menu_rx: mpsc::Receiver<TrayAction>,
     _menu: Menu,
     conn_state: ConnState,
     paused: bool,
@@ -58,7 +57,10 @@ fn icon_for_state(state: ConnState) -> Icon {
 }
 
 impl Tray {
-    pub fn new(event_loop: &ActiveEventLoop) -> anyhow::Result<Self> {
+    pub fn new(
+        event_loop: &ActiveEventLoop,
+        proxy: EventLoopProxy<UiEvent>,
+    ) -> anyhow::Result<Self> {
         let menu = Menu::new();
         let reconnect_item = MenuItem::new("Reconnect", true, None);
         let pause_item = MenuItem::new("Pause Sync", true, None);
@@ -77,7 +79,6 @@ impl Tray {
             .with_tooltip("ClipSync · Not connected")
             .build()?;
 
-        let (menu_tx, menu_rx) = mpsc::channel();
         let reconnect_id = reconnect_item.id().clone();
         let pause_id = pause_item.id().clone();
         let quit_id = quit_item.id().clone();
@@ -94,7 +95,7 @@ impl Tray {
                     None
                 };
                 if let Some(action) = action {
-                    let _ = menu_tx.send(action);
+                    let _ = proxy.send_event(UiEvent::TrayAction(action));
                 }
             }
         });
@@ -103,7 +104,6 @@ impl Tray {
 
         Ok(Self {
             tray_icon,
-            menu_rx,
             _menu: menu,
             conn_state: ConnState::Disconnected,
             paused: false,
@@ -137,9 +137,5 @@ impl Tray {
             let _ = self.tray_icon.set_icon(Some(icon));
             let _ = self.tray_icon.set_tooltip(Some(tooltip));
         }
-    }
-
-    pub fn try_recv_action(&self) -> Option<TrayAction> {
-        self.menu_rx.try_recv().ok()
     }
 }

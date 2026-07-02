@@ -20,8 +20,9 @@ use winit::application::ApplicationHandler;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 
 #[derive(Debug)]
-enum UiEvent {
+pub(crate) enum UiEvent {
     StateChanged(ConnState),
+    TrayAction(TrayAction),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,7 +60,7 @@ impl App {
 impl ApplicationHandler<UiEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.tray.is_none() {
-            match Tray::new(event_loop) {
+            match Tray::new(event_loop, self.proxy.clone()) {
                 Ok(t) => self.tray = Some(t),
                 Err(e) => {
                     log::error!("Failed to create tray: {}", e);
@@ -84,27 +85,26 @@ impl ApplicationHandler<UiEvent> for App {
                     tray.update_state(state);
                 }
             }
+            UiEvent::TrayAction(action) => self.handle_tray_action(action, _event_loop),
         }
     }
+}
 
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if let Some(ref tray) = self.tray {
-            if let Some(action) = tray.try_recv_action() {
-                if matches!(action, TrayAction::Quit) {
-                    event_loop.exit();
-                    return;
-                }
-                if matches!(action, TrayAction::TogglePause) {
-                    let was_paused = self.paused.fetch_xor(true, Ordering::SeqCst);
-                    let now_paused = !was_paused;
-                    if let Some(ref mut tray) = self.tray {
-                        tray.set_paused(now_paused);
-                    }
-                    return;
-                }
-                let _ = self.action_tx.send(action);
-            }
+impl App {
+    fn handle_tray_action(&mut self, action: TrayAction, event_loop: &ActiveEventLoop) {
+        if matches!(action, TrayAction::Quit) {
+            event_loop.exit();
+            return;
         }
+        if matches!(action, TrayAction::TogglePause) {
+            let was_paused = self.paused.fetch_xor(true, Ordering::SeqCst);
+            let now_paused = !was_paused;
+            if let Some(ref mut tray) = self.tray {
+                tray.set_paused(now_paused);
+            }
+            return;
+        }
+        let _ = self.action_tx.send(action);
     }
 }
 
@@ -256,11 +256,16 @@ fn main() -> anyhow::Result<()> {
     let paused_clone = paused.clone();
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(run_sync_loop(cfg_clone, proxy_clone, action_rx, paused_clone));
+        rt.block_on(run_sync_loop(
+            cfg_clone,
+            proxy_clone,
+            action_rx,
+            paused_clone,
+        ));
     });
 
     let mut app = App::new(proxy, action_tx, paused);
-    event_loop.set_control_flow(ControlFlow::Poll);
+    event_loop.set_control_flow(tray_event_loop_control_flow());
     event_loop.run_app(&mut app)?;
 
     Ok(())
@@ -275,4 +280,13 @@ mod tests {
         assert!(!should_retry_failed_endpoint(EndpointOrigin::Discovered));
         assert!(should_retry_failed_endpoint(EndpointOrigin::Direct));
     }
+
+    #[test]
+    fn tray_app_waits_for_events_instead_of_polling() {
+        assert_eq!(tray_event_loop_control_flow(), ControlFlow::Wait);
+    }
+}
+
+fn tray_event_loop_control_flow() -> ControlFlow {
+    ControlFlow::Wait
 }
