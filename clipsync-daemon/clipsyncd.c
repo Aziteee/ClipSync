@@ -20,6 +20,7 @@ static void update_module_status(clipsync_daemon_config *cfg) {
     const char *run_state;
     const char *bridge_state;
     char cmd[512];
+    static char last_cmd[512] = {0};
 
     if (!cfg || !running) {
         run_state = "\xe2\x8f\xb9 Stopped";
@@ -32,6 +33,9 @@ static void update_module_status(clipsync_daemon_config *cfg) {
     snprintf(cmd, sizeof(cmd),
         "ksud module config set override.description \"%s | Bridge: %s | Port: %d\"",
         run_state, bridge_state, cfg ? cfg->port : 0);
+
+    if (strcmp(cmd, last_cmd) == 0) return;
+    strncpy(last_cmd, cmd, sizeof(last_cmd) - 1);
 
     if (system(cmd) != 0) {
         fprintf(stderr, "[clipsyncd] failed to update module description\n");
