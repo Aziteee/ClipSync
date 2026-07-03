@@ -64,10 +64,7 @@ static void on_ws_set(const char *text) {
 
 static void poll_clipboard_change(void) {
     char *text = binder_clip_get_text();
-    if (!text) {
-        g_bridge_healthy = 0;
-        return;
-    }
+    if (!text) return;
     g_bridge_healthy = 1;
     on_clip_change(text);
     free(text);
