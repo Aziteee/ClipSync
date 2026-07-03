@@ -14,6 +14,29 @@
 
 static volatile int running = 1;
 static char g_last_text[65536] = {0};
+static int g_bridge_healthy = 0;
+
+static void update_module_status(clipsync_daemon_config *cfg) {
+    const char *run_state;
+    const char *bridge_state;
+    char cmd[512];
+
+    if (!cfg || !running) {
+        run_state = "Stopped";
+        bridge_state = "-";
+    } else {
+        run_state = "Running";
+        bridge_state = g_bridge_healthy ? "OK" : "ERR";
+    }
+
+    snprintf(cmd, sizeof(cmd),
+        "ksud module config set override.description \"%s | Bridge: %s | Port: %d\"",
+        run_state, bridge_state, cfg ? cfg->port : 0);
+
+    if (system(cmd) != 0) {
+        fprintf(stderr, "[clipsyncd] failed to update module description\n");
+    }
+}
 
 static void on_clip_change(const char *text) {
     if (!text) return;
@@ -41,7 +64,11 @@ static void on_ws_set(const char *text) {
 
 static void poll_clipboard_change(void) {
     char *text = binder_clip_get_text();
-    if (!text) return;
+    if (!text) {
+        g_bridge_healthy = 0;
+        return;
+    }
+    g_bridge_healthy = 1;
     on_clip_change(text);
     free(text);
 }
@@ -85,6 +112,7 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "[clipsyncd] binder_clip_init failed\n");
         return 1;
     }
+    g_bridge_healthy = 1;
     binder_clip_set_callback(on_clip_change);
 
     /* Verify bridge: read current clipboard */
@@ -95,11 +123,17 @@ int main(int argc, char *argv[]) {
     }
 
     printf("[clipsyncd] running. Waiting for connections and clipboard events...\n");
+    update_module_status(&cfg);
 
     /* Event loop */
     int clipboard_poll_ticks = 0;
+    int status_update_ticks = 0;
     while (running) {
-        ws_server_poll(50);   /* drive mongoose (WS + mDNS) */
+        ws_server_poll(50);
+        if (++status_update_ticks >= 100) {
+            status_update_ticks = 0;
+            update_module_status(&cfg);
+        }
         int poll_every_ticks = clipsync_clipboard_poll_ticks_for_clients(ws_server_authenticated_count());
         if (++clipboard_poll_ticks >= poll_every_ticks) {
             clipboard_poll_ticks = 0;
@@ -108,5 +142,6 @@ int main(int argc, char *argv[]) {
     }
 
     printf("[clipsyncd] shutting down.\n");
+    update_module_status(NULL);
     return 0;
 }
