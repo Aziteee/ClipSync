@@ -10,10 +10,10 @@ ClipSync 是一个局域网剪贴板同步项目，用于在 Windows PC 和 Andr
 ## 功能
 
 - PC 与 Android 双向同步文本剪贴板
-- WebSocket 通信，默认端口 `5287`
 - 预共享密钥认证
 - mDNS 自动发现，无感连接
 - Windows 托盘状态显示
+- 轻量，对性能无影响
 
 ## 使用指南
 
@@ -25,14 +25,6 @@ ClipSync 是一个局域网剪贴板同步项目，用于在 Windows PC 和 Andr
 ### Android 端
 
 确保你已有 `Zygisk` 环境，然后在 KernelSU 管理器中安装 `clipsyncd-module.zip`，重启手机。
-
-Android 端主同步链路为：
-
-```text
-clipsyncd -> @clipbridge abstract Unix socket -> Zygisk bridge in system_server -> IClipboard/ClipboardService
-```
-
-`clipsyncd` 本身不直接使用 `libbinder_ndk` 访问剪贴板；`IClipboard` 调用发生在注入 `system_server` 的 Zygisk bridge 内。
 
 Android 模块会读取：
 
@@ -112,4 +104,4 @@ make package
 
 ## 注意
 
-- 仅在 Windows 11 及 ColorOS16 环境测试成功，其他环境不保证正常运行。
+- 仅在 Windows 11 及 Android 16 (ColorOS) 环境测试成功，其他环境不保证正常运行。
