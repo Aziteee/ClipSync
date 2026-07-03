@@ -45,6 +45,7 @@ struct App {
     proxy: EventLoopProxy<UiEvent>,
     action_tx: std::sync::mpsc::Sender<TrayAction>,
     paused: Arc<AtomicBool>,
+    config: config::ClipSyncConfig,
 }
 
 impl App {
@@ -52,12 +53,14 @@ impl App {
         proxy: EventLoopProxy<UiEvent>,
         action_tx: std::sync::mpsc::Sender<TrayAction>,
         paused: Arc<AtomicBool>,
+        config: config::ClipSyncConfig,
     ) -> Self {
         Self {
             tray: None,
             proxy,
             action_tx,
             paused,
+            config,
         }
     }
 }
@@ -65,7 +68,7 @@ impl App {
 impl ApplicationHandler<UiEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.tray.is_none() {
-            match Tray::new(event_loop, self.proxy.clone()) {
+            match Tray::new(event_loop, self.proxy.clone(), self.config.general.start_with_windows) {
                 Ok(t) => self.tray = Some(t),
                 Err(e) => {
                     log::error!("Failed to create tray: {}", e);
@@ -106,6 +109,20 @@ impl App {
             let now_paused = !was_paused;
             if let Some(ref mut tray) = self.tray {
                 tray.set_paused(now_paused);
+            }
+            return;
+        }
+        if matches!(action, TrayAction::ToggleStartWithWindows) {
+            self.config.general.start_with_windows = !self.config.general.start_with_windows;
+            let enabled = self.config.general.start_with_windows;
+            if let Err(e) = self.config.save("clipsync.toml") {
+                log::error!("Failed to save config: {}", e);
+            }
+            if let Err(e) = startup::set_autostart(enabled) {
+                log::error!("Failed to update autostart registry: {}", e);
+            }
+            if let Some(ref mut tray) = self.tray {
+                tray.set_start_with_windows(enabled);
             }
             return;
         }
@@ -266,9 +283,14 @@ async fn run_sync_loop(
 fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let cfg = Arc::new(config::ClipSyncConfig::load("clipsync.toml")?);
-    log::info!("ClipSync PC starting... port={}", cfg.connection.port);
+    let app_config = config::ClipSyncConfig::load("clipsync.toml")?;
+    log::info!("ClipSync PC starting... port={}", app_config.connection.port);
 
+    if let Err(e) = startup::set_autostart(app_config.general.start_with_windows) {
+        log::error!("Failed to sync autostart registry on startup: {}", e);
+    }
+
+    let cfg = Arc::new(app_config.clone());
     let event_loop = EventLoop::<UiEvent>::with_user_event().build()?;
     let proxy = event_loop.create_proxy();
 
@@ -289,7 +311,7 @@ fn main() -> anyhow::Result<()> {
         ));
     });
 
-    let mut app = App::new(proxy, action_tx, paused);
+    let mut app = App::new(proxy, action_tx, paused, app_config);
     event_loop.set_control_flow(tray_event_loop_control_flow());
     event_loop.run_app(&mut app)?;
 
