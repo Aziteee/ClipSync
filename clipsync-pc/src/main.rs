@@ -1,4 +1,4 @@
-#![windows_subsystem = "windows"]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod clip;
 mod config;
@@ -9,6 +9,7 @@ mod sync;
 mod tray;
 mod ws;
 
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -43,7 +44,7 @@ fn heartbeat_is_stale(idle_for: Duration, timeout: Duration) -> bool {
 struct App {
     tray: Option<Tray>,
     proxy: EventLoopProxy<UiEvent>,
-    action_tx: std::sync::mpsc::Sender<TrayAction>,
+    action_tx: mpsc::UnboundedSender<TrayAction>,
     paused: Arc<AtomicBool>,
     config: config::ClipSyncConfig,
     config_path: std::path::PathBuf,
@@ -52,7 +53,7 @@ struct App {
 impl App {
     fn new(
         proxy: EventLoopProxy<UiEvent>,
-        action_tx: std::sync::mpsc::Sender<TrayAction>,
+        action_tx: mpsc::UnboundedSender<TrayAction>,
         paused: Arc<AtomicBool>,
         config: config::ClipSyncConfig,
         config_path: std::path::PathBuf,
@@ -71,7 +72,11 @@ impl App {
 impl ApplicationHandler<UiEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.tray.is_none() {
-            match Tray::new(event_loop, self.proxy.clone(), self.config.general.start_with_windows) {
+            match Tray::new(
+                event_loop,
+                self.proxy.clone(),
+                self.config.general.start_with_windows,
+            ) {
                 Ok(t) => self.tray = Some(t),
                 Err(e) => {
                     log::error!("Failed to create tray: {}", e);
@@ -133,10 +138,57 @@ impl App {
     }
 }
 
+fn send_state(proxy: &EventLoopProxy<UiEvent>, state: ConnState) {
+    if proxy.send_event(UiEvent::StateChanged(state)).is_err() {
+        log::debug!("Failed to send UI state update: {:?}", state);
+    }
+}
+
+fn preserve_text_after_send_failure(engine: &mut SyncEngine, text: String) {
+    engine.store_pending(text);
+}
+
+fn reconnect_interrupts_wait(action: TrayAction) -> bool {
+    matches!(action, TrayAction::Reconnect)
+}
+
+fn state_after_connected_loop_exit() -> ConnState {
+    ConnState::Disconnected
+}
+
+fn handshake_timeout(cfg: &config::ClipSyncConfig) -> Duration {
+    Duration::from_millis(cfg.connection.heartbeat_timeout_ms)
+}
+
+fn config_path_for(exe_path: Option<&Path>, cwd: Option<&Path>) -> PathBuf {
+    let exe_config = exe_path
+        .and_then(Path::parent)
+        .map(|parent| parent.join("clipsync.toml"));
+
+    if let Some(path) = exe_config.as_ref().filter(|path| path.exists()) {
+        return path.clone();
+    }
+
+    if let Some(path) = cwd
+        .map(|cwd| cwd.join("clipsync.toml"))
+        .filter(|path| path.exists())
+    {
+        return path;
+    }
+
+    exe_config.unwrap_or_else(|| PathBuf::from("clipsync.toml"))
+}
+
+fn resolve_config_path() -> PathBuf {
+    let exe_path = std::env::current_exe().ok();
+    let cwd = std::env::current_dir().ok();
+    config_path_for(exe_path.as_deref(), cwd.as_deref())
+}
+
 async fn run_sync_loop(
     cfg: Arc<config::ClipSyncConfig>,
     proxy: EventLoopProxy<UiEvent>,
-    _action_rx: std::sync::mpsc::Receiver<TrayAction>,
+    mut action_rx: mpsc::UnboundedReceiver<TrayAction>,
     paused: Arc<AtomicBool>,
 ) {
     let (clip_tx, mut clip_rx) = mpsc::unbounded_channel::<String>();
@@ -149,41 +201,78 @@ async fn run_sync_loop(
     let heartbeat_timeout = Duration::from_millis(cfg.connection.heartbeat_timeout_ms);
     let mut backoff_secs = 1u64;
     let max_backoff = 60u64;
+    let mut actions_closed = false;
 
-    let _ = proxy.send_event(UiEvent::StateChanged(ConnState::Disconnected));
+    send_state(&proxy, ConnState::Disconnected);
 
-    loop {
-        let (uri, origin) = if let Some(uri) = cfg.connection.direct_ws_uri() {
+    'sync: loop {
+        let endpoint = if let Some(uri) = cfg.connection.direct_ws_uri() {
             log::info!("State: Disconnected — using configured endpoint {}", uri);
-            (uri, EndpointOrigin::Direct)
+            Some((uri, EndpointOrigin::Direct))
         } else {
             log::info!("State: Disconnected — starting mDNS discovery");
 
             let Ok(mut mdns_rx) = mdns::discover(cfg.connection.port) else {
                 log::error!("mDNS discovery failed, retrying in 5s");
-                tokio::time::sleep(Duration::from_secs(5)).await;
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                    action = action_rx.recv(), if !actions_closed => {
+                        match action {
+                            Some(action) if reconnect_interrupts_wait(action) => {
+                                log::info!("Reconnect requested while mDNS setup was backing off");
+                            }
+                            Some(_) => {}
+                            None => actions_closed = true,
+                        }
+                    }
+                }
                 continue;
             };
 
-            loop {
+            let mut discovered = None;
+            while discovered.is_none() {
                 tokio::select! {
-                    Some(uri) = mdns_rx.recv() => break (uri, EndpointOrigin::Discovered),
-                Some(text) = clip_rx.recv() => {
-                    if !paused.load(Ordering::Relaxed) {
-                        log::info!("Queued pending PC clipboard while disconnected: {} chars", text.chars().count());
-                        engine.store_pending(text);
+                    uri = mdns_rx.recv() => {
+                        match uri {
+                            Some(uri) => discovered = Some((uri, EndpointOrigin::Discovered)),
+                            None => {
+                                log::warn!("mDNS discovery channel closed; restarting discovery");
+                                break;
+                            }
+                        }
                     }
-                }
+                    Some(text) = clip_rx.recv() => {
+                        if !paused.load(Ordering::Relaxed) {
+                            log::info!("Queued pending PC clipboard while disconnected: {} chars", text.chars().count());
+                            engine.store_pending(text);
+                        }
+                    }
+                    action = action_rx.recv(), if !actions_closed => {
+                        match action {
+                            Some(action) if reconnect_interrupts_wait(action) => {
+                                log::info!("Reconnect requested while discovering; restarting discovery");
+                                continue 'sync;
+                            }
+                            Some(_) => {}
+                            None => actions_closed = true,
+                        }
+                    }
                     _ = tokio::time::sleep(Duration::from_secs(5)) => {}
                 }
             }
+            discovered
         };
 
-        let _ = proxy.send_event(UiEvent::StateChanged(ConnState::Connecting));
+        let Some((uri, origin)) = endpoint else {
+            send_state(&proxy, ConnState::Disconnected);
+            continue;
+        };
+
+        send_state(&proxy, ConnState::Connecting);
 
         let ws = loop {
             log::info!("Connecting to {}...", uri);
-            match ws::connect_and_auth(&uri, &cfg.auth.secret).await {
+            match ws::connect_and_auth(&uri, &cfg.auth.secret, handshake_timeout(&cfg)).await {
                 Ok(ws) => {
                     log::info!("Connected and authenticated!");
                     break Some(ws);
@@ -195,25 +284,43 @@ async fn run_sync_loop(
                         break None;
                     }
                     log::info!("Retrying in {}s...", backoff_secs);
-                    tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                    let retry_after = backoff_secs;
                     backoff_secs = (backoff_secs * 2).min(max_backoff);
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_secs(retry_after)) => {}
+                        action = action_rx.recv(), if !actions_closed => {
+                            match action {
+                                Some(action) if reconnect_interrupts_wait(action) => {
+                                    log::info!("Reconnect requested during direct endpoint backoff");
+                                    backoff_secs = 1;
+                                }
+                                Some(_) => {}
+                                None => actions_closed = true,
+                            }
+                        }
+                    }
                 }
             }
         };
         let Some(mut ws) = ws else {
-            let _ = proxy.send_event(UiEvent::StateChanged(ConnState::Disconnected));
+            send_state(&proxy, ConnState::Disconnected);
             backoff_secs = 1;
             continue;
         };
         backoff_secs = 1;
 
-        let _ = proxy.send_event(UiEvent::StateChanged(ConnState::Connected));
+        send_state(&proxy, ConnState::Connected);
 
         if let Some(pending_text) = engine.take_pending() {
-            let msg = protocol::ClipMessage::set(pending_text);
+            let msg = protocol::ClipMessage::set(pending_text.clone());
             match ws::send(&mut ws, &msg).await {
                 Ok(()) => log::info!("Sent pending clipboard_set"),
-                Err(e) => log::error!("Failed to send pending clipboard_set: {}", e),
+                Err(e) => {
+                    log::error!("Failed to send pending clipboard_set: {}", e);
+                    preserve_text_after_send_failure(&mut engine, pending_text);
+                    send_state(&proxy, state_after_connected_loop_exit());
+                    continue;
+                }
             }
         }
 
@@ -232,11 +339,14 @@ async fn run_sync_loop(
                     }
                 }
                 _ = &mut debounce_sleep, if debounce_text.is_some() => {
-                    let text = debounce_text.take().unwrap();
+                    let Some(text) = debounce_text.take() else {
+                        continue;
+                    };
                     if !paused.load(Ordering::Relaxed) && engine.should_send(&text) {
                         let msg = protocol::ClipMessage::set(text.clone());
                         if let Err(e) = ws::send(&mut ws, &msg).await {
                             log::error!("Failed to send clipboard_set: {}", e);
+                            preserve_text_after_send_failure(&mut engine, text);
                             break 'connected;
                         }
                         log::info!("Sent clipboard_set: {} chars", text.chars().count());
@@ -262,7 +372,9 @@ async fn run_sync_loop(
                             if !paused.load(Ordering::Relaxed) {
                                 let ok = clip::write(&text);
                                 log::info!("Received clipboard_push: {} chars; PC clipboard write={}", text.chars().count(), ok);
-                                engine.mark_sent(&text);
+                                if ok {
+                                    engine.mark_sent(&text);
+                                }
                             }
                         }
                         Ok(protocol::ClipMessage::Ping) => {
@@ -276,23 +388,39 @@ async fn run_sync_loop(
                         _ => {}
                     }
                 }
+                action = action_rx.recv(), if !actions_closed => {
+                    match action {
+                        Some(action) if reconnect_interrupts_wait(action) => {
+                            log::info!("Reconnect requested; closing current connection");
+                            if let Some(text) = debounce_text.take() {
+                                preserve_text_after_send_failure(&mut engine, text);
+                            }
+                            break 'connected;
+                        }
+                        Some(_) => {}
+                        None => actions_closed = true,
+                    }
+                }
             }
         }
 
         log::info!("State: Disconnected");
+        send_state(&proxy, state_after_connected_loop_exit());
     }
 }
 
 fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let config_path = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_default()
-        .join("clipsync.toml");
+    let config_path = resolve_config_path();
 
     let app_config = config::ClipSyncConfig::load(&config_path)?;
+    if app_config.has_empty_secret() {
+        log::warn!(
+            "auth.secret is empty in {}; HMAC auth will use an empty shared secret",
+            config_path.display()
+        );
+    }
     log::info!("ClipSync PC starting... config={}", config_path.display());
 
     if let Err(e) = startup::set_autostart(app_config.general.start_with_windows) {
@@ -303,7 +431,7 @@ fn main() -> anyhow::Result<()> {
     let event_loop = EventLoop::<UiEvent>::with_user_event().build()?;
     let proxy = event_loop.create_proxy();
 
-    let (action_tx, action_rx) = std::sync::mpsc::channel::<TrayAction>();
+    let (action_tx, action_rx) = mpsc::unbounded_channel::<TrayAction>();
 
     let paused = Arc::new(AtomicBool::new(false));
 
@@ -325,6 +453,10 @@ fn main() -> anyhow::Result<()> {
     event_loop.run_app(&mut app)?;
 
     Ok(())
+}
+
+fn tray_event_loop_control_flow() -> ControlFlow {
+    ControlFlow::Wait
 }
 
 #[cfg(test)]
@@ -353,8 +485,39 @@ mod tests {
             Duration::from_millis(15_000)
         ));
     }
-}
 
-fn tray_event_loop_control_flow() -> ControlFlow {
-    ControlFlow::Wait
+    #[test]
+    fn failed_send_text_is_preserved_as_pending() {
+        let mut engine = SyncEngine::new();
+        preserve_text_after_send_failure(&mut engine, "offline".into());
+        assert_eq!(engine.take_pending(), Some("offline".into()));
+    }
+
+    #[test]
+    fn reconnect_action_interrupts_waits() {
+        assert!(reconnect_interrupts_wait(TrayAction::Reconnect));
+        assert!(!reconnect_interrupts_wait(TrayAction::TogglePause));
+    }
+
+    #[test]
+    fn connected_loop_exit_reports_disconnected() {
+        assert_eq!(state_after_connected_loop_exit(), ConnState::Disconnected);
+    }
+
+    #[test]
+    fn handshake_timeout_uses_heartbeat_timeout() {
+        let mut cfg = config::ClipSyncConfig::default();
+        cfg.connection.heartbeat_timeout_ms = 12_345;
+        assert_eq!(handshake_timeout(&cfg), Duration::from_millis(12_345));
+    }
+
+    #[test]
+    fn config_path_prefers_existing_cwd_config_when_exe_config_is_missing() {
+        let cwd = std::env::current_dir().unwrap();
+        let exe = cwd.join("target").join("debug").join("clipsync-pc.exe");
+        assert_eq!(
+            config_path_for(Some(&exe), Some(&cwd)),
+            cwd.join("clipsync.toml")
+        );
+    }
 }

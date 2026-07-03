@@ -19,7 +19,7 @@ impl SyncEngine {
 
     pub fn should_send(&self, text: &str) -> bool {
         let h = Self::hash(text);
-        self.last_sent_hash.map_or(true, |prev| prev != h)
+        self.last_sent_hash != Some(h)
     }
 
     pub fn mark_sent(&mut self, text: &str) {
@@ -34,6 +34,7 @@ impl SyncEngine {
         self.pending.take()
     }
 
+    #[cfg(test)]
     pub fn has_pending(&self) -> bool {
         self.pending.is_some()
     }

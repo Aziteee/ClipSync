@@ -16,6 +16,7 @@ pub fn set_self_writing(v: bool) {
     SELF_WRITING.store(v, Ordering::SeqCst);
 }
 
+#[cfg(test)]
 pub fn is_self_writing() -> bool {
     SELF_WRITING.load(Ordering::SeqCst)
 }
@@ -89,6 +90,7 @@ pub struct ClipDeduper {
 }
 
 impl ClipDeduper {
+    #[cfg(test)]
     pub fn new() -> Self {
         Self { last: None }
     }
@@ -321,6 +323,7 @@ mod tests {
     static CLIPBOARD_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
+    #[ignore = "requires an interactive Windows clipboard"]
     fn test_read_write_roundtrip() {
         let _guard = CLIPBOARD_TEST_LOCK.lock().unwrap();
         let test_text = "ClipSync-test-hello";

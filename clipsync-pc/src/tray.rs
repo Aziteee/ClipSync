@@ -68,12 +68,8 @@ impl Tray {
         let menu = Menu::new();
         let reconnect_item = MenuItem::new("Reconnect", true, None);
         let pause_item = MenuItem::new("Pause Sync", true, None);
-        let autostart_item = CheckMenuItem::new(
-            "Start with Windows",
-            true,
-            start_with_windows,
-            None,
-        );
+        let autostart_item =
+            CheckMenuItem::new("Start with Windows", true, start_with_windows, None);
         let separator = PredefinedMenuItem::separator();
         let quit_item = MenuItem::new("Quit", true, None);
 

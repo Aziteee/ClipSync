@@ -38,7 +38,8 @@ impl ClipMessage {
         serde_json::from_str(json)
     }
 
-    pub fn push(text: String) -> Self {
+    #[cfg(test)]
+    fn push(text: String) -> Self {
         ClipMessage::Push {
             text,
             ts: now_millis(),
@@ -59,16 +60,12 @@ mod tests {
 
     #[test]
     fn test_push_roundtrip() {
-        let msg = ClipMessage::Push {
-            text: "hello".into(),
-            ts: 1719859200,
-        };
+        let msg = ClipMessage::push("hello".into());
         let json = msg.to_json();
         let decoded = ClipMessage::from_json(&json).unwrap();
         match decoded {
-            ClipMessage::Push { text, ts } => {
+            ClipMessage::Push { text, .. } => {
                 assert_eq!(text, "hello");
-                assert_eq!(ts, 1719859200);
             }
             _ => panic!("wrong variant"),
         }

@@ -1,21 +1,13 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GeneralConfig {
     #[serde(default)]
     pub start_with_windows: bool,
 }
 
-impl Default for GeneralConfig {
-    fn default() -> Self {
-        Self {
-            start_with_windows: false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ClipSyncConfig {
     #[serde(default)]
     pub connection: ConnectionConfig,
@@ -41,7 +33,7 @@ pub struct ConnectionConfig {
     pub heartbeat_timeout_ms: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AuthConfig {
     #[serde(default)]
     pub secret: String,
@@ -66,17 +58,6 @@ fn default_debounce_ms() -> u64 {
     300
 }
 
-impl Default for ClipSyncConfig {
-    fn default() -> Self {
-        Self {
-            connection: ConnectionConfig::default(),
-            auth: AuthConfig::default(),
-            clipboard: ClipboardConfig::default(),
-            general: GeneralConfig::default(),
-        }
-    }
-}
-
 impl Default for ConnectionConfig {
     fn default() -> Self {
         Self {
@@ -85,14 +66,6 @@ impl Default for ConnectionConfig {
             uri: None,
             heartbeat_interval_ms: default_heartbeat_interval_ms(),
             heartbeat_timeout_ms: default_heartbeat_timeout_ms(),
-        }
-    }
-}
-
-impl Default for AuthConfig {
-    fn default() -> Self {
-        Self {
-            secret: String::new(),
         }
     }
 }
@@ -120,6 +93,10 @@ impl ClipSyncConfig {
         let content = toml::to_string_pretty(self)?;
         std::fs::write(path, content)?;
         Ok(())
+    }
+
+    pub fn has_empty_secret(&self) -> bool {
+        self.auth.secret.trim().is_empty()
     }
 }
 
@@ -158,7 +135,20 @@ mod tests {
         assert_eq!(cfg.connection.heartbeat_interval_ms, 5_000);
         assert_eq!(cfg.connection.heartbeat_timeout_ms, 15_000);
         assert!(cfg.auth.secret.is_empty());
-        assert_eq!(cfg.general.start_with_windows, false);
+        assert!(!cfg.general.start_with_windows);
+    }
+
+    #[test]
+    fn test_empty_secret_is_detected() {
+        let cfg = ClipSyncConfig::default();
+        assert!(cfg.has_empty_secret());
+    }
+
+    #[test]
+    fn test_non_empty_secret_is_not_detected_as_empty() {
+        let mut cfg = ClipSyncConfig::default();
+        cfg.auth.secret = "test-key".into();
+        assert!(!cfg.has_empty_secret());
     }
 
     #[test]
