@@ -1,6 +1,6 @@
 use crate::UiEvent;
 use tray_icon::{
-    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     Icon, TrayIcon, TrayIconBuilder,
 };
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
@@ -16,14 +16,17 @@ pub enum ConnState {
 pub enum TrayAction {
     Reconnect,
     TogglePause,
+    ToggleStartWithWindows,
     Quit,
 }
 
 pub struct Tray {
     tray_icon: TrayIcon,
     _menu: Menu,
+    _autostart_item: CheckMenuItem,
     conn_state: ConnState,
     paused: bool,
+    start_with_windows: bool,
 }
 
 fn make_icon_data(r: u8, g: u8, b: u8) -> Vec<u8> {
@@ -60,15 +63,23 @@ impl Tray {
     pub fn new(
         event_loop: &ActiveEventLoop,
         proxy: EventLoopProxy<UiEvent>,
+        start_with_windows: bool,
     ) -> anyhow::Result<Self> {
         let menu = Menu::new();
         let reconnect_item = MenuItem::new("Reconnect", true, None);
         let pause_item = MenuItem::new("Pause Sync", true, None);
+        let autostart_item = CheckMenuItem::new(
+            "Start with Windows",
+            true,
+            start_with_windows,
+            None,
+        );
         let separator = PredefinedMenuItem::separator();
         let quit_item = MenuItem::new("Quit", true, None);
 
         menu.append(&reconnect_item)?;
         menu.append(&pause_item)?;
+        menu.append(&autostart_item)?;
         menu.append(&separator)?;
         menu.append(&quit_item)?;
 
@@ -76,11 +87,12 @@ impl Tray {
         let tray_icon = TrayIconBuilder::new()
             .with_menu(Box::new(menu.clone()))
             .with_icon(icon)
-            .with_tooltip("ClipSync · Not connected")
+            .with_tooltip("ClipSync \u{b7} Not connected")
             .build()?;
 
         let reconnect_id = reconnect_item.id().clone();
         let pause_id = pause_item.id().clone();
+        let autostart_id = autostart_item.id().clone();
         let quit_id = quit_item.id().clone();
 
         std::thread::spawn(move || loop {
@@ -89,6 +101,8 @@ impl Tray {
                     Some(TrayAction::Reconnect)
                 } else if event.id == pause_id {
                     Some(TrayAction::TogglePause)
+                } else if event.id == autostart_id {
+                    Some(TrayAction::ToggleStartWithWindows)
                 } else if event.id == quit_id {
                     Some(TrayAction::Quit)
                 } else {
@@ -105,8 +119,10 @@ impl Tray {
         Ok(Self {
             tray_icon,
             _menu: menu,
+            _autostart_item: autostart_item,
             conn_state: ConnState::Disconnected,
             paused: false,
+            start_with_windows,
         })
     }
 
@@ -118,6 +134,11 @@ impl Tray {
     pub fn set_paused(&mut self, paused: bool) {
         self.paused = paused;
         self.refresh();
+    }
+
+    pub fn set_start_with_windows(&mut self, enabled: bool) {
+        self.start_with_windows = enabled;
+        self._autostart_item.set_checked(enabled);
     }
 
     fn refresh(&mut self) {
