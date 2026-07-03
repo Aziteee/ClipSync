@@ -158,6 +158,7 @@ mod tests {
         assert_eq!(cfg.connection.heartbeat_interval_ms, 5_000);
         assert_eq!(cfg.connection.heartbeat_timeout_ms, 15_000);
         assert!(cfg.auth.secret.is_empty());
+        assert_eq!(cfg.general.start_with_windows, false);
     }
 
     #[test]
