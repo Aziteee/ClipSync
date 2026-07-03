@@ -22,11 +22,11 @@ static void update_module_status(clipsync_daemon_config *cfg) {
     char cmd[512];
 
     if (!cfg || !running) {
-        run_state = "Stopped";
+        run_state = "\xe2\x8f\xb9 Stopped";
         bridge_state = "-";
     } else {
-        run_state = "Running";
-        bridge_state = g_bridge_healthy ? "OK" : "ERR";
+        run_state = "\xe2\x96\xb6 Running";
+        bridge_state = g_bridge_healthy ? "\xe2\x9c\x85 OK" : "\xe2\x9d\x8c ERR";
     }
 
     snprintf(cmd, sizeof(cmd),
