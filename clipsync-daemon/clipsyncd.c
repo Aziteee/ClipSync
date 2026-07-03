@@ -5,7 +5,7 @@
 #include <unistd.h>
 #include <time.h>
 #include "protocol.h"
-#include "binder_clip.h"
+#include "clip_bridge_client.h"
 #include "ws_server.h"
 #include "mdns_publish.h"
 #include "protocol_json.h"
@@ -61,13 +61,13 @@ static void on_ws_set(const char *text) {
     if (!text) return;
     printf("[clipsyncd] received set: %lu chars\n", (unsigned long)strlen(text));
     strncpy(g_last_text, text, sizeof(g_last_text) - 1);
-    if (binder_clip_set_text(text) != 0) {
+    if (clip_bridge_set_text(text) != 0) {
         fprintf(stderr, "[clipsyncd] failed to write Android clipboard\n");
     }
 }
 
 static void poll_clipboard_change(void) {
-    char *text = binder_clip_get_text();
+    char *text = clip_bridge_get_text();
     if (!text) return;
     g_bridge_healthy = 1;
     on_clip_change(text);
@@ -109,16 +109,15 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    if (binder_clip_init() != 0) {
-        fprintf(stderr, "[clipsyncd] binder_clip_init failed\n");
+    if (clip_bridge_init() != 0) {
+        fprintf(stderr, "[clipsyncd] clip_bridge_init failed\n");
         return 1;
     }
     g_bridge_healthy = 1;
-    binder_clip_set_callback(on_clip_change);
 
     /* Verify bridge: read current clipboard */
     {
-        char *txt = binder_clip_get_text();
+        char *txt = clip_bridge_get_text();
         printf("[clipsyncd] current clipboard: %s\n", txt ? txt : "(empty)");
         if (txt) free(txt);
     }

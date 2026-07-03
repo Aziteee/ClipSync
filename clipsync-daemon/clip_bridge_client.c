@@ -1,10 +1,10 @@
 /* ClipSync clipboard access via Unix socket to Zygisk bridge
  *
- * The Zygisk module creates an abstract Unix socket @clipbridge
- * Protocol: send "READ\n", "WRITE text\n", "HAS\n"; receive "text\n", "OK\n", "1\n"/"0\n"
+ * The Zygisk module creates an abstract Unix socket @clipbridge.
+ * Protocol: send "READ\n", "WRITE text\n", "HAS\n"; receive "text\n", "OK\n", "1\n"/"0\n".
  */
 
-#include "binder_clip.h"
+#include "clip_bridge_client.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -41,24 +41,24 @@ static char *sock_command(const char *cmd) {
     return strdup(buf);
 }
 
-int binder_clip_init(void) {
-    /* Retry with backoff — system_server may not be ready yet at boot */
+int clip_bridge_init(void) {
+    /* Retry with backoff: system_server may not be ready yet at boot. */
     for (int attempt = 0; attempt < 10; attempt++) {
         int fd = sock_connect();
         if (fd >= 0) {
             close(fd);
-            printf("[binder_clip] connected to clipboard bridge (attempt %d)\n", attempt + 1);
+            printf("[clip_bridge] connected to clipboard bridge (attempt %d)\n", attempt + 1);
             return 0;
         }
         if (attempt < 9) {
             sleep(1);
         }
     }
-    fprintf(stderr, "[binder_clip] cannot connect to @%s after 10 attempts\n", SOCK_ABSTRACT_NAME);
+    fprintf(stderr, "[clip_bridge] cannot connect to @%s after 10 attempts\n", SOCK_ABSTRACT_NAME);
     return -1;
 }
 
-char *binder_clip_get_text(void) {
+char *clip_bridge_get_text(void) {
     char *resp = sock_command("READ\n");
     if (!resp) return NULL;
     size_t len = strlen(resp);
@@ -67,7 +67,7 @@ char *binder_clip_get_text(void) {
     return resp;
 }
 
-int binder_clip_set_text(const char *text) {
+int clip_bridge_set_text(const char *text) {
     char cmd[65536 + 16];
     snprintf(cmd, sizeof(cmd), "WRITE %s\n", text ? text : "");
     char *resp = sock_command(cmd);
@@ -75,9 +75,4 @@ int binder_clip_set_text(const char *text) {
     int ok = (strncmp(resp, "OK", 2) == 0) ? 0 : -1;
     free(resp);
     return ok;
-}
-
-void binder_clip_set_callback(clip_change_cb cb) {
-    (void)cb;
-    printf("[binder_clip] callback registered (no listener �?poll mode)\n");
 }

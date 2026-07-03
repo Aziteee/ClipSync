@@ -1,3 +1,10 @@
+/* Legacy direct Binder diagnostic.
+ *
+ * This tool probes Android's clipboard Binder service directly through libbinder_ndk.
+ * It is not part of the main sync path, which uses clipsyncd -> @clipbridge ->
+ * Zygisk/JNI -> IClipboard.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

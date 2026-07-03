@@ -8,6 +8,16 @@
 - 已连接 adb 设备（示例设备号 `293b43e2`）
 - Android NDK 路径：`D:\AppData\Android\sdk\ndk\30.0.14904198`
 
+## 当前剪贴板访问架构
+
+主同步链路不是 `clipsyncd` 直接使用 `libbinder_ndk`：
+
+```text
+clipsyncd -> @clipbridge abstract Unix socket -> Zygisk bridge in system_server -> IClipboard/ClipboardService
+```
+
+`IClipboard` 调用发生在注入 `system_server` 的 Zygisk bridge 内。`clipsyncd` 只通过 `@clipbridge` 发送 `READ` / `WRITE` 命令；调试 `@clipbridge` 仍按本文后续流程。
+
 ## 一键编译
 
 在 `clipsync-daemon/` 目录下执行：

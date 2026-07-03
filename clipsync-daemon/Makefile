@@ -1,9 +1,10 @@
 BUILD_DIR = build
 CC ?= aarch64-linux-android33-clang
 CFLAGS = -Wall -Wextra -O2 -Ithird_party/mongoose -DMG_ENABLE_MDNS=1
-LDFLAGS = -lbinder_ndk -ldl
+LDFLAGS = -ldl
+TEST_CLIP_LDFLAGS = -lbinder_ndk -ldl
 TARGET = $(BUILD_DIR)/clipsyncd
-SRCS = clipsyncd.c binder_clip.c ws_server.c mdns_publish.c protocol_json.c crypto_hmac.c clipboard_poll.c daemon_config.c third_party/mongoose/mongoose.c
+SRCS = clipsyncd.c clip_bridge_client.c ws_server.c mdns_publish.c protocol_json.c crypto_hmac.c clipboard_poll.c daemon_config.c third_party/mongoose/mongoose.c
 OBJS = $(SRCS:%.c=$(BUILD_DIR)/%.o)
 NDK_BUILD ?= ndk-build
 ZYGISK_SO = module/zygisk/arm64-v8a.so
@@ -73,7 +74,7 @@ test: $(BUILD_DIR)/test_clip
 	adb shell su -c "chmod 755 /data/local/tmp/test_clip && /data/local/tmp/test_clip"
 
 $(BUILD_DIR)/test_clip: test_clip.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+	$(CC) $(CFLAGS) -o $@ $< $(TEST_CLIP_LDFLAGS)
 
 $(BUILD_DIR)/test_crypto_hmac: test_crypto_hmac.c crypto_hmac.c crypto_hmac.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ test_crypto_hmac.c crypto_hmac.c
