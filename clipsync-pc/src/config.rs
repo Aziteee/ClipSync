@@ -2,6 +2,20 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeneralConfig {
+    #[serde(default)]
+    pub start_with_windows: bool,
+}
+
+impl Default for GeneralConfig {
+    fn default() -> Self {
+        Self {
+            start_with_windows: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClipSyncConfig {
     #[serde(default)]
     pub connection: ConnectionConfig,
@@ -9,6 +23,8 @@ pub struct ClipSyncConfig {
     pub auth: AuthConfig,
     #[serde(default)]
     pub clipboard: ClipboardConfig,
+    #[serde(default)]
+    pub general: GeneralConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +72,7 @@ impl Default for ClipSyncConfig {
             connection: ConnectionConfig::default(),
             auth: AuthConfig::default(),
             clipboard: ClipboardConfig::default(),
+            general: GeneralConfig::default(),
         }
     }
 }
@@ -97,6 +114,12 @@ impl ClipSyncConfig {
         } else {
             Ok(Self::default())
         }
+    }
+
+    pub fn save(&self, path: impl AsRef<Path>) -> anyhow::Result<()> {
+        let content = toml::to_string_pretty(self)?;
+        std::fs::write(path, content)?;
+        Ok(())
     }
 }
 

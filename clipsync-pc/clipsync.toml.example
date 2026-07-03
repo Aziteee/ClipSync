@@ -10,3 +10,6 @@ secret = "your-pre-shared-key-here"
 
 [clipboard]
 debounce_ms = 300
+
+[general]
+start_with_windows = false
