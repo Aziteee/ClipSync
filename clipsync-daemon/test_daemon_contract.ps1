@@ -109,6 +109,14 @@ if ($wsServer -notmatch "AUTH_TIMEOUT_MS" -or $wsServer -notmatch "auth_deadline
     throw "WebSocket server must close unauthenticated clients after an auth deadline"
 }
 
+if ($wsServer -notmatch "#define MAX_CLIENTS 1") {
+    throw "WebSocket server must allow only one PC connection"
+}
+
+if ($daemonMain -notmatch "PC: %s" -or $daemonMain -notmatch "Connected" -or $daemonMain -notmatch "Waiting") {
+    throw "module description must include PC connection state"
+}
+
 if ($makefile -notmatch "ReadAllBytes\('\$\(ZYGISK_BUILD_SO\)'\)" -or $makefile -notmatch "Zygisk module copy verification failed") {
     throw "make module must verify and repair the packaged Zygisk .so copy"
 }

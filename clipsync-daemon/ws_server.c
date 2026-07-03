@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MAX_CLIENTS 4
+#define MAX_CLIENTS 1
 #define CHALLENGE_BYTES 32
 #define CHALLENGE_HEX_LEN 64
 #define AUTH_TIMEOUT_MS 5000

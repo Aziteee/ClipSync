@@ -19,20 +19,23 @@ static int g_bridge_healthy = 0;
 static void update_module_status(clipsync_daemon_config *cfg) {
     const char *run_state;
     const char *bridge_state;
+    const char *pc_state;
     char cmd[512];
     static char last_cmd[512] = {0};
 
     if (!cfg || !running) {
         run_state = "\xe2\x8f\xb9 Stopped";
         bridge_state = "-";
+        pc_state = "-";
     } else {
         run_state = "\xe2\x96\xb6 Running";
         bridge_state = g_bridge_healthy ? "\xe2\x9c\x85 OK" : "\xe2\x9d\x8c ERR";
+        pc_state = ws_server_authenticated_count() > 0 ? "\xe2\x9c\x85 Connected" : "\xe2\x9a\xaa Waiting";
     }
 
     snprintf(cmd, sizeof(cmd),
-        "ksud module config set override.description \"%s | Bridge: %s | Port: %d\"",
-        run_state, bridge_state, cfg ? cfg->port : 0);
+        "ksud module config set override.description \"%s | Bridge: %s | PC: %s | Port: %d\"",
+        run_state, bridge_state, pc_state, cfg ? cfg->port : 0);
 
     if (strcmp(cmd, last_cmd) == 0) return;
     strncpy(last_cmd, cmd, sizeof(last_cmd) - 1);
