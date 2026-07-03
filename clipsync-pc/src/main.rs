@@ -4,6 +4,7 @@ mod clip;
 mod config;
 mod mdns;
 mod protocol;
+mod startup;
 mod sync;
 mod tray;
 mod ws;
