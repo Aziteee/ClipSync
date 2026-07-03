@@ -115,11 +115,11 @@ impl App {
         if matches!(action, TrayAction::ToggleStartWithWindows) {
             self.config.general.start_with_windows = !self.config.general.start_with_windows;
             let enabled = self.config.general.start_with_windows;
-            if let Err(e) = self.config.save("clipsync.toml") {
-                log::error!("Failed to save config: {}", e);
-            }
             if let Err(e) = startup::set_autostart(enabled) {
                 log::error!("Failed to update autostart registry: {}", e);
+            }
+            if let Err(e) = self.config.save("clipsync.toml") {
+                log::error!("Failed to save config: {}", e);
             }
             if let Some(ref mut tray) = self.tray {
                 tray.set_start_with_windows(enabled);

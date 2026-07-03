@@ -23,7 +23,7 @@ pub enum TrayAction {
 pub struct Tray {
     tray_icon: TrayIcon,
     _menu: Menu,
-    _autostart_item: CheckMenuItem,
+    autostart_item: CheckMenuItem,
     conn_state: ConnState,
     paused: bool,
     start_with_windows: bool,
@@ -119,7 +119,7 @@ impl Tray {
         Ok(Self {
             tray_icon,
             _menu: menu,
-            _autostart_item: autostart_item,
+            autostart_item,
             conn_state: ConnState::Disconnected,
             paused: false,
             start_with_windows,
@@ -138,7 +138,7 @@ impl Tray {
 
     pub fn set_start_with_windows(&mut self, enabled: bool) {
         self.start_with_windows = enabled;
-        self._autostart_item.set_checked(enabled);
+        self.autostart_item.set_checked(enabled);
     }
 
     fn refresh(&mut self) {
