@@ -10,10 +10,12 @@
 #define MAX_CLIENTS 4
 #define CHALLENGE_BYTES 32
 #define CHALLENGE_HEX_LEN 64
+#define AUTH_TIMEOUT_MS 5000
 
 typedef struct {
     struct mg_connection *conn;
     int authenticated;
+    unsigned long long auth_deadline_ms;
     char challenge[CHALLENGE_HEX_LEN + 1];
 } ws_client;
 
@@ -27,6 +29,7 @@ static int g_initialized = 0;
 static ws_client *client_find(struct mg_connection *c);
 static ws_client *client_alloc(struct mg_connection *c);
 static void client_free(struct mg_connection *c);
+static void close_expired_auth_clients(void);
 static int make_challenge(char out[CHALLENGE_HEX_LEN + 1]);
 static void send_text(struct mg_connection *c, const char *json);
 static void handle_auth(struct mg_connection *c, ws_client *client, const char *json, size_t len);
@@ -50,10 +53,22 @@ static ws_client *client_alloc(struct mg_connection *c) {
         if (!g_clients[i].conn) {
             memset(&g_clients[i], 0, sizeof(g_clients[i]));
             g_clients[i].conn = c;
+            g_clients[i].auth_deadline_ms = mg_millis() + AUTH_TIMEOUT_MS;
             return &g_clients[i];
         }
     }
     return NULL;
+}
+
+static void close_expired_auth_clients(void) {
+    unsigned long long now = mg_millis();
+    for (size_t i = 0; i < MAX_CLIENTS; i++) {
+        if (g_clients[i].conn && !g_clients[i].authenticated &&
+            g_clients[i].auth_deadline_ms != 0 &&
+            now >= g_clients[i].auth_deadline_ms) {
+            g_clients[i].conn->is_closing = 1;
+        }
+    }
 }
 
 static void client_free(struct mg_connection *c) {
@@ -109,6 +124,7 @@ static void handle_auth(struct mg_connection *c, ws_client *client, const char *
 
     free(response);
     client->authenticated = 1;
+    client->auth_deadline_ms = 0;
     char *ok = protocol_json_build_auth_ok();
     send_text(c, ok);
     free(ok);
@@ -202,6 +218,7 @@ int ws_server_init(int port, const char *secret) {
 
 void ws_server_poll(int timeout_ms) {
     if (g_initialized) {
+        close_expired_auth_clients();
         mg_mgr_poll(&g_mgr, timeout_ms);
     }
 }

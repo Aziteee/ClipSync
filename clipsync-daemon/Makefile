@@ -4,7 +4,7 @@ CFLAGS = -Wall -Wextra -O2 -Ithird_party/mongoose -DMG_ENABLE_MDNS=1
 LDFLAGS = -ldl
 TEST_CLIP_LDFLAGS = -lbinder_ndk -ldl
 TARGET = $(BUILD_DIR)/clipsyncd
-SRCS = clipsyncd.c clip_bridge_client.c ws_server.c mdns_publish.c protocol_json.c crypto_hmac.c clipboard_poll.c daemon_config.c third_party/mongoose/mongoose.c
+SRCS = clipsyncd.c clip_bridge_client.c bridge_protocol.c ws_server.c mdns_publish.c protocol_json.c crypto_hmac.c clipboard_poll.c daemon_config.c third_party/mongoose/mongoose.c
 OBJS = $(SRCS:%.c=$(BUILD_DIR)/%.o)
 NDK_BUILD ?= ndk-build
 ZYGISK_SO = module/zygisk/arm64-v8a.so
@@ -13,7 +13,7 @@ DIST_DIR = dist
 PACKAGE = $(DIST_DIR)/clipsyncd-module.zip
 CONFIG_SRC = config/clipsync.toml
 
-all: $(TARGET) $(BUILD_DIR)/test_clip $(BUILD_DIR)/test_crypto_hmac $(BUILD_DIR)/test_protocol_json $(BUILD_DIR)/test_clipboard_poll $(BUILD_DIR)/test_daemon_config $(ZYGISK_SO)
+all: $(TARGET) $(BUILD_DIR)/test_clip $(BUILD_DIR)/test_bridge_client $(BUILD_DIR)/test_crypto_hmac $(BUILD_DIR)/test_protocol_json $(BUILD_DIR)/test_clipboard_poll $(BUILD_DIR)/test_daemon_config $(BUILD_DIR)/test_bridge_protocol $(ZYGISK_SO)
 
 $(BUILD_DIR):
 	@if not exist $(BUILD_DIR) mkdir $(BUILD_DIR)
@@ -37,11 +37,8 @@ $(ZYGISK_SO): zygisk/jni/main.cpp zygisk/jni/zygisk.hpp zygisk/jni/Android.mk zy
 	copy /Y zygisk\libs\arm64-v8a\libzygisk_clipsync.so $(ZYGISK_SO)
 
 clean:
-	rm -f $(OBJS) $(TARGET) $(ZYGISK_SO)
-	rm -f $(PACKAGE)
-	rmdir $(BUILD_DIR) 2>/dev/null || true
-	rmdir $(DIST_DIR) 2>/dev/null || true
-	$(NDK_BUILD) -C zygisk clean 2>nul || true
+	@powershell -NoProfile -ExecutionPolicy Bypass -Command "Remove-Item -LiteralPath '$(BUILD_DIR)','$(DIST_DIR)','$(ZYGISK_SO)' -Recurse -Force -ErrorAction SilentlyContinue"
+	-@$(NDK_BUILD) -C zygisk clean 2>nul
 
 install: $(TARGET)
 	adb push $(TARGET) /data/local/tmp/
@@ -52,6 +49,7 @@ module: $(TARGET) $(ZYGISK_SO) $(CONFIG_SRC)
 	@if not exist module\config mkdir module\config
 	@copy /Y build\clipsyncd module\system\bin\clipsyncd >nul
 	@copy /Y config\clipsync.toml module\config\clipsync.toml >nul
+	@powershell -NoProfile -ExecutionPolicy Bypass -Command "if ([Convert]::ToBase64String([Security.Cryptography.MD5]::Create().ComputeHash([IO.File]::ReadAllBytes('$(ZYGISK_BUILD_SO)'))) -ne [Convert]::ToBase64String([Security.Cryptography.MD5]::Create().ComputeHash([IO.File]::ReadAllBytes('$(ZYGISK_SO)')))) { Copy-Item -Path '$(ZYGISK_BUILD_SO)' -Destination '$(ZYGISK_SO)' -Force }; if ([Convert]::ToBase64String([Security.Cryptography.MD5]::Create().ComputeHash([IO.File]::ReadAllBytes('$(ZYGISK_BUILD_SO)'))) -ne [Convert]::ToBase64String([Security.Cryptography.MD5]::Create().ComputeHash([IO.File]::ReadAllBytes('$(ZYGISK_SO)')))) { throw 'Zygisk module copy verification failed' }"
 	@if exist module\libzygisk_clipsync.so del /F /Q module\libzygisk_clipsync.so
 	@echo ========================================
 	@echo KernelSU module ready in module/
@@ -67,7 +65,7 @@ package: module
 	@echo KernelSU module package ready:
 	@echo   $(PACKAGE)
 
-.PHONY: all clean install module package test test-crypto test-json test-clipboard-poll test-daemon-config
+.PHONY: all clean install module package test test-crypto test-json test-clipboard-poll test-daemon-config test-bridge-protocol test-bridge-client
 
 test: $(BUILD_DIR)/test_clip
 	adb push $(BUILD_DIR)/test_clip /data/local/tmp/
@@ -75,6 +73,13 @@ test: $(BUILD_DIR)/test_clip
 
 $(BUILD_DIR)/test_clip: test_clip.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ $< $(TEST_CLIP_LDFLAGS)
+
+$(BUILD_DIR)/test_bridge_client: test_bridge_client.c bridge_protocol.c bridge_protocol.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ test_bridge_client.c bridge_protocol.c
+
+test-bridge-client: $(BUILD_DIR)/test_bridge_client
+	adb push $(BUILD_DIR)/test_bridge_client /data/local/tmp/
+	adb shell su -c "chmod 755 /data/local/tmp/test_bridge_client && /data/local/tmp/test_bridge_client read"
 
 $(BUILD_DIR)/test_crypto_hmac: test_crypto_hmac.c crypto_hmac.c crypto_hmac.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ test_crypto_hmac.c crypto_hmac.c
@@ -96,6 +101,13 @@ $(BUILD_DIR)/test_clipboard_poll: test_clipboard_poll.c clipboard_poll.c clipboa
 test-clipboard-poll: $(BUILD_DIR)/test_clipboard_poll
 	adb push $(BUILD_DIR)/test_clipboard_poll /data/local/tmp/
 	adb shell su -c "chmod 755 /data/local/tmp/test_clipboard_poll && /data/local/tmp/test_clipboard_poll"
+
+$(BUILD_DIR)/test_bridge_protocol: test_bridge_protocol.c bridge_protocol.c bridge_protocol.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ test_bridge_protocol.c bridge_protocol.c
+
+test-bridge-protocol: $(BUILD_DIR)/test_bridge_protocol
+	adb push $(BUILD_DIR)/test_bridge_protocol /data/local/tmp/
+	adb shell su -c "chmod 755 /data/local/tmp/test_bridge_protocol && /data/local/tmp/test_bridge_protocol"
 
 $(BUILD_DIR)/test_daemon_config: test_daemon_config.c daemon_config.c daemon_config.h protocol.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ test_daemon_config.c daemon_config.c

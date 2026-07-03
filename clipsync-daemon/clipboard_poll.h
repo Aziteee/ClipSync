@@ -3,9 +3,9 @@
 
 #include <stddef.h>
 
-#define CLIPBOARD_POLL_TICKS_CONNECTED 10
-#define CLIPBOARD_POLL_TICKS_IDLE 100
+#define CLIPBOARD_POLL_TICK_MS 50
+#define CLIPBOARD_POLL_IDLE_MIN_MS 5000
 
-int clipsync_clipboard_poll_ticks_for_clients(size_t authenticated_clients);
+int clipsync_clipboard_poll_ticks_for_clients(size_t authenticated_clients, int debounce_ms);
 
 #endif

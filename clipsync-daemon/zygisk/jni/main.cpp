@@ -3,7 +3,7 @@
  * Architecture:
  *   Zygisk injects into system_server
  *   → Creates Unix domain socket @clipbridge (abstract namespace)
- *   → Accepts simple text commands: "READ\n", "WRITE text\n", "HAS\n"
+ *   → Accepts length-prefixed commands: "READ\n", "WRITE <len>\n<body>", "HAS\n"
  *   → Uses JNI to call local ClipboardService (no Binder, no permission check)
  *   → clipsyncd connects to the socket to read/write clipboard
  *
@@ -15,6 +15,7 @@
  * socket thread must AttachCurrentThread because JNIEnv is thread-local.
  */
 #include "zygisk.hpp"
+#include "../../bridge_protocol.h"
 #include <jni.h>
 #include <android/log.h>
 #include <cstdio>
@@ -26,6 +27,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
 #include <pthread.h>
 
@@ -67,6 +69,57 @@ using zygisk::Api;
 static JNIEnv *g_env = nullptr;
 static JavaVM *g_vm = nullptr;
 
+static bool jni_clear_exception(const char *ctx) {
+    if (!g_env || !g_env->ExceptionCheck()) return false;
+    LOGE("%s: JNI exception", ctx);
+    g_env->ExceptionDescribe();
+    g_env->ExceptionClear();
+    return true;
+}
+
+static bool jni_ok(const char *ctx) {
+    return !jni_clear_exception(ctx);
+}
+
+static jclass find_class(const char *name) {
+    jclass cls = g_env ? g_env->FindClass(name) : nullptr;
+    if (!cls || !jni_ok(name)) {
+        LOGE("FindClass failed: %s", name);
+        return nullptr;
+    }
+    return cls;
+}
+
+static jmethodID get_method(jclass cls, const char *name, const char *sig) {
+    if (!cls) return nullptr;
+    jmethodID method = g_env->GetMethodID(cls, name, sig);
+    if (!method || !jni_ok(name)) {
+        LOGE("GetMethodID failed: %s %s", name, sig);
+        return nullptr;
+    }
+    return method;
+}
+
+static jmethodID get_static_method(jclass cls, const char *name, const char *sig) {
+    if (!cls) return nullptr;
+    jmethodID method = g_env->GetStaticMethodID(cls, name, sig);
+    if (!method || !jni_ok(name)) {
+        LOGE("GetStaticMethodID failed: %s %s", name, sig);
+        return nullptr;
+    }
+    return method;
+}
+
+static jfieldID get_field(jclass cls, const char *name, const char *sig) {
+    if (!cls) return nullptr;
+    jfieldID field = g_env->GetFieldID(cls, name, sig);
+    if (!field || !jni_ok(name)) {
+        LOGE("GetFieldID failed: %s %s", name, sig);
+        return nullptr;
+    }
+    return field;
+}
+
 static void log_cmdline(const char *prefix) {
     FILE *f = fopen("/proc/self/cmdline", "r");
     if (!f) { LOGD("%s: cannot open /proc/self/cmdline", prefix); return; }
@@ -80,17 +133,22 @@ static void log_cmdline(const char *prefix) {
 /* --- JNI: Call local ClipboardService --- */
 static jobject getClipboardService() {
     if (!g_env) return nullptr;
-    jclass sm = g_env->FindClass("android/os/ServiceManager");
-    if (!sm) { LOGE("ServiceManager class not found"); return nullptr; }
-    jmethodID getService = g_env->GetStaticMethodID(sm, "getService", "(Ljava/lang/String;)Landroid/os/IBinder;");
-    if (!getService) return nullptr;
+    jclass sm = find_class("android/os/ServiceManager");
+    if (!sm) return nullptr;
+    jmethodID getService = get_static_method(sm, "getService", "(Ljava/lang/String;)Landroid/os/IBinder;");
+    if (!getService) { g_env->DeleteLocalRef(sm); return nullptr; }
     jstring name = g_env->NewStringUTF("clipboard");
+    if (!name || !jni_ok("NewStringUTF clipboard")) { g_env->DeleteLocalRef(sm); return nullptr; }
     jobject binder = g_env->CallStaticObjectMethod(sm, getService, name);
+    if (!jni_ok("ServiceManager.getService")) binder = nullptr;
     g_env->DeleteLocalRef(name); g_env->DeleteLocalRef(sm);
     if (!binder) return nullptr;
-    jclass stub = g_env->FindClass("android/content/IClipboard$Stub");
-    jmethodID asInterface = g_env->GetStaticMethodID(stub, "asInterface", "(Landroid/os/IBinder;)Landroid/content/IClipboard;");
+    jclass stub = find_class("android/content/IClipboard$Stub");
+    if (!stub) { g_env->DeleteLocalRef(binder); return nullptr; }
+    jmethodID asInterface = get_static_method(stub, "asInterface", "(Landroid/os/IBinder;)Landroid/content/IClipboard;");
+    if (!asInterface) { g_env->DeleteLocalRef(binder); g_env->DeleteLocalRef(stub); return nullptr; }
     jobject cb = g_env->CallStaticObjectMethod(stub, asInterface, binder);
+    if (!jni_ok("IClipboard.Stub.asInterface")) cb = nullptr;
     g_env->DeleteLocalRef(binder); g_env->DeleteLocalRef(stub);
     return cb;
 }
@@ -98,21 +156,44 @@ static jobject getClipboardService() {
 static char *clipDataToText(jobject cd) {
     if (!cd) return nullptr;
     char *result = nullptr;
-    jclass cdClass = g_env->FindClass("android/content/ClipData");
-    jmethodID getItemAt = g_env->GetMethodID(cdClass, "getItemAt", "(I)Landroid/content/ClipData$Item;");
+    jclass cdClass = find_class("android/content/ClipData");
+    if (!cdClass) return nullptr;
+    jmethodID getItemAt = get_method(cdClass, "getItemAt", "(I)Landroid/content/ClipData$Item;");
+    if (!getItemAt) { g_env->DeleteLocalRef(cdClass); return nullptr; }
     jobject item = g_env->CallObjectMethod(cd, getItemAt, (jint)0);
+    if (!jni_ok("ClipData.getItemAt")) item = nullptr;
     if (item) {
         jclass itemClass = g_env->GetObjectClass(item);
-        jmethodID getText = g_env->GetMethodID(itemClass, "getText", "()Ljava/lang/CharSequence;");
+        if (!itemClass || !jni_ok("GetObjectClass ClipData.Item")) {
+            if (itemClass) g_env->DeleteLocalRef(itemClass);
+            g_env->DeleteLocalRef(item);
+            g_env->DeleteLocalRef(cdClass);
+            return nullptr;
+        }
+        jmethodID getText = get_method(itemClass, "getText", "()Ljava/lang/CharSequence;");
+        if (!getText) { g_env->DeleteLocalRef(itemClass); g_env->DeleteLocalRef(item); g_env->DeleteLocalRef(cdClass); return nullptr; }
         jobject cs = g_env->CallObjectMethod(item, getText);
+        if (!jni_ok("ClipData.Item.getText")) cs = nullptr;
         if (cs) {
             jclass csClass = g_env->GetObjectClass(cs);
-            jmethodID toString = g_env->GetMethodID(csClass, "toString", "()Ljava/lang/String;");
+            if (!csClass || !jni_ok("GetObjectClass CharSequence")) {
+                if (csClass) g_env->DeleteLocalRef(csClass);
+                g_env->DeleteLocalRef(cs);
+                g_env->DeleteLocalRef(itemClass);
+                g_env->DeleteLocalRef(item);
+                g_env->DeleteLocalRef(cdClass);
+                return nullptr;
+            }
+            jmethodID toString = get_method(csClass, "toString", "()Ljava/lang/String;");
+            if (!toString) { g_env->DeleteLocalRef(csClass); g_env->DeleteLocalRef(cs); g_env->DeleteLocalRef(itemClass); g_env->DeleteLocalRef(item); g_env->DeleteLocalRef(cdClass); return nullptr; }
             jstring js = (jstring)g_env->CallObjectMethod(cs, toString);
+            if (!jni_ok("CharSequence.toString")) js = nullptr;
             if (js) {
                 const char *u = g_env->GetStringUTFChars(js, nullptr);
-                if (u) result = strdup(u);
-                g_env->ReleaseStringUTFChars(js, u);
+                if (u && jni_ok("GetStringUTFChars")) {
+                    result = strdup(u);
+                    g_env->ReleaseStringUTFChars(js, u);
+                }
                 g_env->DeleteLocalRef(js);
             }
             g_env->DeleteLocalRef(csClass);
@@ -176,15 +257,16 @@ static void logClassFields(jclass cls, const char *prefix) {
 static jobject readClipboardDirect(jobject impl) {
     if (!impl) return nullptr;
     jclass implClass = g_env->GetObjectClass(impl);
-    jfieldID outerField = g_env->GetFieldID(implClass, "this$0", "Lcom/android/server/clipboard/ClipboardService;");
-    if (!outerField || g_env->ExceptionCheck()) {
-        g_env->ExceptionClear();
+    if (!implClass || !jni_ok("GetObjectClass IClipboard impl")) return nullptr;
+    jfieldID outerField = get_field(implClass, "this$0", "Lcom/android/server/clipboard/ClipboardService;");
+    if (!outerField) {
         g_env->DeleteLocalRef(implClass);
         LOGE("readClipboardDirect: ClipboardImpl.this$0 not found");
         return nullptr;
     }
 
     jobject service = g_env->GetObjectField(impl, outerField);
+    if (!jni_ok("ClipboardImpl.this$0")) service = nullptr;
     g_env->DeleteLocalRef(implClass);
     if (!service) {
         LOGE("readClipboardDirect: ClipboardService outer is null");
@@ -192,9 +274,13 @@ static jobject readClipboardDirect(jobject impl) {
     }
 
     jclass serviceClass = g_env->GetObjectClass(service);
-    jfieldID clipboardsField = g_env->GetFieldID(serviceClass, "mClipboards", "Landroid/util/SparseArrayMap;");
-    if (!clipboardsField || g_env->ExceptionCheck()) {
-        g_env->ExceptionClear();
+    if (!serviceClass || !jni_ok("GetObjectClass ClipboardService")) {
+        if (serviceClass) g_env->DeleteLocalRef(serviceClass);
+        g_env->DeleteLocalRef(service);
+        return nullptr;
+    }
+    jfieldID clipboardsField = get_field(serviceClass, "mClipboards", "Landroid/util/SparseArrayMap;");
+    if (!clipboardsField) {
         logClassFields(serviceClass, "ClipboardService");
         g_env->DeleteLocalRef(serviceClass);
         g_env->DeleteLocalRef(service);
@@ -203,6 +289,7 @@ static jobject readClipboardDirect(jobject impl) {
     }
 
     jobject clipboards = g_env->GetObjectField(service, clipboardsField);
+    if (!jni_ok("ClipboardService.mClipboards")) clipboards = nullptr;
     g_env->DeleteLocalRef(serviceClass);
     g_env->DeleteLocalRef(service);
     if (!clipboards) {
@@ -210,15 +297,23 @@ static jobject readClipboardDirect(jobject impl) {
         return nullptr;
     }
 
-    jclass integerClass = g_env->FindClass("java/lang/Integer");
-    jmethodID valueOf = g_env->GetStaticMethodID(integerClass, "valueOf", "(I)Ljava/lang/Integer;");
+    jclass integerClass = find_class("java/lang/Integer");
+    if (!integerClass) { g_env->DeleteLocalRef(clipboards); return nullptr; }
+    jmethodID valueOf = get_static_method(integerClass, "valueOf", "(I)Ljava/lang/Integer;");
+    if (!valueOf) { g_env->DeleteLocalRef(integerClass); g_env->DeleteLocalRef(clipboards); return nullptr; }
     jobject deviceId = g_env->CallStaticObjectMethod(integerClass, valueOf, (jint)0);
-    jclass sparseMapClass = g_env->FindClass("android/util/SparseArrayMap");
-    jmethodID getMethod = g_env->GetMethodID(sparseMapClass, "get", "(ILjava/lang/Object;)Ljava/lang/Object;");
+    if (!jni_ok("Integer.valueOf")) deviceId = nullptr;
+    jclass sparseMapClass = find_class("android/util/SparseArrayMap");
+    if (!deviceId || !sparseMapClass) {
+        if (sparseMapClass) g_env->DeleteLocalRef(sparseMapClass);
+        if (deviceId) g_env->DeleteLocalRef(deviceId);
+        g_env->DeleteLocalRef(integerClass);
+        g_env->DeleteLocalRef(clipboards);
+        return nullptr;
+    }
+    jmethodID getMethod = get_method(sparseMapClass, "get", "(ILjava/lang/Object;)Ljava/lang/Object;");
     jobject perUser = getMethod ? g_env->CallObjectMethod(clipboards, getMethod, (jint)0, deviceId) : nullptr;
-    if (g_env->ExceptionCheck()) {
-        g_env->ExceptionDescribe();
-        g_env->ExceptionClear();
+    if (!jni_ok("SparseArrayMap.get")) {
         perUser = nullptr;
     }
     g_env->DeleteLocalRef(sparseMapClass);
@@ -231,9 +326,13 @@ static jobject readClipboardDirect(jobject impl) {
     }
 
     jclass perUserClass = g_env->GetObjectClass(perUser);
-    jfieldID primaryClipField = g_env->GetFieldID(perUserClass, "primaryClip", "Landroid/content/ClipData;");
-    if (!primaryClipField || g_env->ExceptionCheck()) {
-        g_env->ExceptionClear();
+    if (!perUserClass || !jni_ok("GetObjectClass perUser clipboard")) {
+        if (perUserClass) g_env->DeleteLocalRef(perUserClass);
+        g_env->DeleteLocalRef(perUser);
+        return nullptr;
+    }
+    jfieldID primaryClipField = get_field(perUserClass, "primaryClip", "Landroid/content/ClipData;");
+    if (!primaryClipField) {
         g_env->DeleteLocalRef(perUserClass);
         g_env->DeleteLocalRef(perUser);
         LOGE("readClipboardDirect: primaryClip not found");
@@ -241,6 +340,7 @@ static jobject readClipboardDirect(jobject impl) {
     }
 
     jobject clip = g_env->GetObjectField(perUser, primaryClipField);
+    if (!jni_ok("ClipboardState.primaryClip")) clip = nullptr;
     g_env->DeleteLocalRef(perUserClass);
     g_env->DeleteLocalRef(perUser);
     return clip;
@@ -250,21 +350,25 @@ static char *readClipboard() {
     jobject svc = getClipboardService();
     if (!svc) { LOGE("readClipboard: service null"); return nullptr; }
     jclass iclip = g_env->GetObjectClass(svc);
+    if (!iclip || !jni_ok("GetObjectClass IClipboard")) {
+        if (iclip) g_env->DeleteLocalRef(iclip);
+        g_env->DeleteLocalRef(svc);
+        return nullptr;
+    }
     bool modern_api = true;
     jmethodID m = g_env->GetMethodID(iclip, "getPrimaryClip", "(Ljava/lang/String;Ljava/lang/String;II)Landroid/content/ClipData;");
     if (!m) {
-        g_env->ExceptionClear();
+        jni_clear_exception("getPrimaryClip modern lookup");
         modern_api = false;
         m = g_env->GetMethodID(iclip, "getPrimaryClip", "(Ljava/lang/String;I)Landroid/content/ClipData;");
     }
-    if (!m) { LOGE("readClipboard: getPrimaryClip method not found"); g_env->DeleteLocalRef(iclip); g_env->DeleteLocalRef(svc); return nullptr; }
+    if (!m || !jni_ok("getPrimaryClip legacy lookup")) { LOGE("readClipboard: getPrimaryClip method not found"); g_env->DeleteLocalRef(iclip); g_env->DeleteLocalRef(svc); return nullptr; }
     jstring pkg = g_env->NewStringUTF(kClipboardCallerPackage);
+    if (!pkg || !jni_ok("NewStringUTF read package")) { g_env->DeleteLocalRef(iclip); g_env->DeleteLocalRef(svc); return nullptr; }
     jobject cd = modern_api
         ? g_env->CallObjectMethod(svc, m, pkg, nullptr, (jint)0, (jint)0)
         : g_env->CallObjectMethod(svc, m, pkg, (jint)0);
-    if (g_env->ExceptionCheck()) {
-        g_env->ExceptionDescribe();
-        g_env->ExceptionClear();
+    if (!jni_ok("IClipboard.getPrimaryClip")) {
         cd = nullptr;
     }
     g_env->DeleteLocalRef(pkg);
@@ -284,71 +388,144 @@ static char *readClipboard() {
     return result;
 }
 
-static void writeClipboard(const char *text) {
-    if (!text) return;
+static bool writeClipboard(const char *text) {
+    if (!text) return false;
     jobject svc = getClipboardService();
-    if (!svc) { LOGE("writeClipboard: service null"); return; }
+    if (!svc) { LOGE("writeClipboard: service null"); return false; }
     jclass iclip = g_env->GetObjectClass(svc);
+    if (!iclip || !jni_ok("GetObjectClass IClipboard write")) {
+        if (iclip) g_env->DeleteLocalRef(iclip);
+        g_env->DeleteLocalRef(svc);
+        return false;
+    }
     bool modern_api = true;
     jmethodID m = g_env->GetMethodID(iclip, "setPrimaryClip", "(Landroid/content/ClipData;Ljava/lang/String;Ljava/lang/String;II)V");
     if (!m) {
-        g_env->ExceptionClear();
+        jni_clear_exception("setPrimaryClip modern lookup");
         modern_api = false;
         m = g_env->GetMethodID(iclip, "setPrimaryClip", "(Landroid/content/ClipData;Ljava/lang/String;I)V");
     }
-    if (!m) { LOGE("writeClipboard: setPrimaryClip method not found"); g_env->DeleteLocalRef(iclip); g_env->DeleteLocalRef(svc); return; }
-    jclass cd = g_env->FindClass("android/content/ClipData");
-    jmethodID npt = g_env->GetStaticMethodID(cd, "newPlainText", "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/content/ClipData;");
+    if (!m || !jni_ok("setPrimaryClip legacy lookup")) { LOGE("writeClipboard: setPrimaryClip method not found"); g_env->DeleteLocalRef(iclip); g_env->DeleteLocalRef(svc); return false; }
+    jclass cd = find_class("android/content/ClipData");
+    if (!cd) { g_env->DeleteLocalRef(iclip); g_env->DeleteLocalRef(svc); return false; }
+    jmethodID npt = get_static_method(cd, "newPlainText", "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/content/ClipData;");
+    if (!npt) { g_env->DeleteLocalRef(cd); g_env->DeleteLocalRef(iclip); g_env->DeleteLocalRef(svc); return false; }
     jstring lb = g_env->NewStringUTF("ClipSync");
     jstring tx = g_env->NewStringUTF(text);
+    if (!lb || !tx || !jni_ok("NewStringUTF write text")) {
+        if (lb) g_env->DeleteLocalRef(lb);
+        if (tx) g_env->DeleteLocalRef(tx);
+        g_env->DeleteLocalRef(cd); g_env->DeleteLocalRef(iclip); g_env->DeleteLocalRef(svc);
+        return false;
+    }
     jobject clip = g_env->CallStaticObjectMethod(cd, npt, lb, tx);
+    if (!jni_ok("ClipData.newPlainText")) clip = nullptr;
     g_env->DeleteLocalRef(lb); g_env->DeleteLocalRef(tx);
+    bool ok = false;
     if (clip) {
         jstring pk = g_env->NewStringUTF(kClipboardCallerPackage);
-        if (modern_api) {
-            g_env->CallVoidMethod(svc, m, clip, pk, nullptr, (jint)0, (jint)0);
-        } else {
-            g_env->CallVoidMethod(svc, m, clip, pk, (jint)0);
+        if (pk && jni_ok("NewStringUTF write package")) {
+            if (modern_api) {
+                g_env->CallVoidMethod(svc, m, clip, pk, nullptr, (jint)0, (jint)0);
+            } else {
+                g_env->CallVoidMethod(svc, m, clip, pk, (jint)0);
+            }
+            ok = jni_ok("IClipboard.setPrimaryClip");
         }
-        if (g_env->ExceptionCheck()) {
-            g_env->ExceptionDescribe();
-            g_env->ExceptionClear();
-        }
-        g_env->DeleteLocalRef(pk); g_env->DeleteLocalRef(clip);
+        if (pk) g_env->DeleteLocalRef(pk);
+        g_env->DeleteLocalRef(clip);
     } else {
         LOGE("writeClipboard: ClipData creation failed");
     }
     g_env->DeleteLocalRef(cd); g_env->DeleteLocalRef(iclip); g_env->DeleteLocalRef(svc);
+    return ok;
 }
 
 /* --- Socket server --- */
-static void handle_client(int fd) {
-    char buf[65536];
-    ssize_t n = read(fd, buf, sizeof(buf) - 1);
-    if (n <= 0) { close(fd); return; }
-    buf[n] = 0;
+static bool peer_is_root(int fd) {
+    struct ucred cred = {};
+    socklen_t len = sizeof(cred);
+    if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) != 0) {
+        LOGE("SO_PEERCRED failed: %s", strerror(errno));
+        return false;
+    }
+    if (cred.uid != 0) {
+        LOGE("rejecting @clipbridge peer pid=%d uid=%d gid=%d", cred.pid, cred.uid, cred.gid);
+        return false;
+    }
+    return true;
+}
 
-    if (strncmp(buf, "READ", 4) == 0) {
+static void write_err(int fd, const char *reason) {
+    bridge_write_cstr(fd, "ERR ");
+    bridge_write_cstr(fd, reason ? reason : "unknown");
+    bridge_write_cstr(fd, "\n");
+}
+
+static void handle_client(int fd) {
+    char line[256];
+
+    if (!peer_is_root(fd)) {
+        write_err(fd, "forbidden");
+        close(fd);
+        return;
+    }
+
+    if (bridge_read_line(fd, line, sizeof(line)) != 0) {
+        write_err(fd, "bad_header");
+        close(fd);
+        return;
+    }
+
+    if (strcmp(line, "READ\n") == 0) {
         char *text = readClipboard();
+        size_t len = text ? strlen(text) : 0;
+        char header[64];
+        if (len > CLIPSYNC_BRIDGE_MAX_PAYLOAD) {
+            if (text) free(text);
+            write_err(fd, "too_large");
+            close(fd);
+            return;
+        }
+        snprintf(header, sizeof(header), "DATA %lu\n", (unsigned long)len);
+        bridge_write_cstr(fd, header);
         if (text) {
-            write(fd, text, strlen(text));
+            bridge_write_full(fd, text, len);
             free(text);
         }
-        write(fd, "\n", 1);
-    } else if (strncmp(buf, "WRITE ", 6) == 0) {
-        char *text = buf + 6;
-        size_t len = strlen(text);
-        while (len > 0 && (text[len - 1] == '\n' || text[len - 1] == '\r')) {
-            text[--len] = '\0';
+    } else if (strncmp(line, "WRITE ", 6) == 0) {
+        size_t len = 0;
+        char *text;
+        if (bridge_parse_len_header(line, "WRITE ", &len) != 0) {
+            write_err(fd, "bad_length");
+            close(fd);
+            return;
         }
-        writeClipboard(text);
-        write(fd, "OK\n", 3);
-    } else if (strncmp(buf, "HAS", 3) == 0) {
+        text = (char *)malloc(len + 1);
+        if (!text) {
+            write_err(fd, "oom");
+            close(fd);
+            return;
+        }
+        if (bridge_read_full(fd, text, len) != 0) {
+            free(text);
+            write_err(fd, "bad_body");
+            close(fd);
+            return;
+        }
+        text[len] = '\0';
+        if (writeClipboard(text)) {
+            bridge_write_cstr(fd, "OK\n");
+        } else {
+            write_err(fd, "write_failed");
+        }
+        free(text);
+    } else if (strcmp(line, "HAS\n") == 0) {
         char *text = readClipboard();
-        write(fd, text ? "1\n" : "0\n", 2);
+        bridge_write_cstr(fd, text ? "HAS 1\n" : "HAS 0\n");
         if (text) free(text);
     } else {
-        write(fd, "ERR\n", 4);
+        write_err(fd, "unknown_command");
     }
     close(fd);
 }

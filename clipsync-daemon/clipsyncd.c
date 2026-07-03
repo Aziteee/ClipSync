@@ -134,7 +134,7 @@ int main(int argc, char *argv[]) {
             status_update_ticks = 0;
             update_module_status(&cfg);
         }
-        int poll_every_ticks = clipsync_clipboard_poll_ticks_for_clients(ws_server_authenticated_count());
+        int poll_every_ticks = clipsync_clipboard_poll_ticks_for_clients(ws_server_authenticated_count(), cfg.debounce_ms);
         if (++clipboard_poll_ticks >= poll_every_ticks) {
             clipboard_poll_ticks = 0;
             poll_clipboard_change();

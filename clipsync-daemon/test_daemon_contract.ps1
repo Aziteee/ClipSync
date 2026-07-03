@@ -41,6 +41,10 @@ if ($makefile -notmatch "clip_bridge_client\.c") {
     throw "daemon sources must use clip_bridge_client.c for the clipbridge socket client"
 }
 
+if ($makefile -notmatch "bridge_protocol\.c") {
+    throw "daemon and zygisk builds must include the shared bridge protocol helper"
+}
+
 if ($makefile -match "SRCS\s*=.*$legacyClipSourcePattern") {
     throw "daemon sources must not use the legacy Binder-named clipbridge client source"
 }
@@ -97,12 +101,36 @@ if ($daemonMain -notmatch "ws_server_authenticated_count") {
     throw "clipsyncd must adapt clipboard polling based on authenticated WebSocket clients"
 }
 
+if ($daemonMain -notmatch "cfg\.debounce_ms") {
+    throw "clipsyncd must apply configured clipboard.debounce_ms to polling"
+}
+
+if ($wsServer -notmatch "AUTH_TIMEOUT_MS" -or $wsServer -notmatch "auth_deadline_ms") {
+    throw "WebSocket server must close unauthenticated clients after an auth deadline"
+}
+
+if ($makefile -notmatch "ReadAllBytes\('\$\(ZYGISK_BUILD_SO\)'\)" -or $makefile -notmatch "Zygisk module copy verification failed") {
+    throw "make module must verify and repair the packaged Zygisk .so copy"
+}
+
+if ($makefile -match "(?m)^\s*rm\s" -or $makefile -match "\|\|\s*true") {
+    throw "Makefile clean/module rules must not depend on Unix rm or shell '|| true'"
+}
+
 if ($zygiskMain -match "com\.android\.shell") {
     throw "Zygisk clipboard bridge runs as system_server and must not claim com.android.shell"
 }
 
 if ($zygiskMain -notmatch '"android"') {
     throw "Zygisk clipboard bridge must use a package name owned by UID 1000"
+}
+
+if ($zygiskMain -notmatch "SO_PEERCRED" -or $zygiskMain -notmatch "cred\.uid != 0") {
+    throw "Zygisk bridge must restrict @clipbridge clients by peer credentials"
+}
+
+if ($zygiskMain -notmatch "WRITE <len>" -or $zygiskMain -notmatch "DATA %lu") {
+    throw "Zygisk bridge must use the length-prefixed bridge protocol"
 }
 
 Write-Host "daemon contract checks passed"

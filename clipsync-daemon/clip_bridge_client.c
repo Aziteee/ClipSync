@@ -1,10 +1,11 @@
 /* ClipSync clipboard access via Unix socket to Zygisk bridge
  *
  * The Zygisk module creates an abstract Unix socket @clipbridge.
- * Protocol: send "READ\n", "WRITE text\n", "HAS\n"; receive "text\n", "OK\n", "1\n"/"0\n".
+ * Protocol: send "READ\n", "WRITE <len>\n<body>", "HAS\n".
  */
 
 #include "clip_bridge_client.h"
+#include "bridge_protocol.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -29,18 +30,6 @@ static int sock_connect(void) {
     return fd;
 }
 
-static char *sock_command(const char *cmd) {
-    int fd = sock_connect();
-    if (fd < 0) return NULL;
-    write(fd, cmd, strlen(cmd));
-    char buf[65536];
-    ssize_t n = read(fd, buf, sizeof(buf) - 1);
-    close(fd);
-    if (n <= 0) return NULL;
-    buf[n] = 0;
-    return strdup(buf);
-}
-
 int clip_bridge_init(void) {
     /* Retry with backoff: system_server may not be ready yet at boot. */
     for (int attempt = 0; attempt < 10; attempt++) {
@@ -59,20 +48,57 @@ int clip_bridge_init(void) {
 }
 
 char *clip_bridge_get_text(void) {
-    char *resp = sock_command("READ\n");
-    if (!resp) return NULL;
-    size_t len = strlen(resp);
-    if (len > 0 && resp[len-1] == '\n') resp[len-1] = 0;
-    if (resp[0] == 0) { free(resp); return NULL; }
-    return resp;
+    int fd = sock_connect();
+    char line[256];
+    size_t len = 0;
+    char *text;
+
+    if (fd < 0) return NULL;
+    if (bridge_write_cstr(fd, "READ\n") != 0 ||
+        bridge_read_line(fd, line, sizeof(line)) != 0 ||
+        bridge_parse_len_header(line, "DATA ", &len) != 0) {
+        close(fd);
+        return NULL;
+    }
+
+    text = (char *)malloc(len + 1);
+    if (!text) {
+        close(fd);
+        return NULL;
+    }
+    if (bridge_read_full(fd, text, len) != 0) {
+        free(text);
+        close(fd);
+        return NULL;
+    }
+    close(fd);
+    text[len] = '\0';
+    if (len == 0) {
+        free(text);
+        return NULL;
+    }
+    return text;
 }
 
 int clip_bridge_set_text(const char *text) {
-    char cmd[65536 + 16];
-    snprintf(cmd, sizeof(cmd), "WRITE %s\n", text ? text : "");
-    char *resp = sock_command(cmd);
-    if (!resp) return -1;
-    int ok = (strncmp(resp, "OK", 2) == 0) ? 0 : -1;
-    free(resp);
+    const char *safe = text ? text : "";
+    size_t len = strlen(safe);
+    char header[64];
+    char line[256];
+    int fd;
+    int ok;
+
+    if (len > CLIPSYNC_BRIDGE_MAX_PAYLOAD) return -1;
+    fd = sock_connect();
+    if (fd < 0) return -1;
+    snprintf(header, sizeof(header), "WRITE %lu\n", (unsigned long)len);
+    if (bridge_write_cstr(fd, header) != 0 ||
+        bridge_write_full(fd, safe, len) != 0 ||
+        bridge_read_line(fd, line, sizeof(line)) != 0) {
+        close(fd);
+        return -1;
+    }
+    close(fd);
+    ok = (strncmp(line, "OK", 2) == 0) ? 0 : -1;
     return ok;
 }

@@ -3,6 +3,8 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <stdlib.h>
+#include "bridge_protocol.h"
 
 #define SOCK_ABSTRACT_NAME "clipbridge"
 
@@ -25,41 +27,77 @@ static int connect_bridge(void) {
 }
 
 int main(int argc, char **argv) {
-    char cmd[65536 + 16];
+    int fd;
     if (argc < 2) {
-        fprintf(stderr, "usage: test_bridge_client read|write [text]\n");
+        fprintf(stderr, "usage: test_bridge_client read|write [text]|has\n");
         return 2;
     }
 
-    if (strcmp(argv[1], "read") == 0) {
-        snprintf(cmd, sizeof(cmd), "READ\n");
-    } else if (strcmp(argv[1], "write") == 0) {
-        snprintf(cmd, sizeof(cmd), "WRITE %s\n", argc >= 3 ? argv[2] : "");
-    } else {
-        fprintf(stderr, "unknown command: %s\n", argv[1]);
-        return 2;
-    }
-
-    int fd = connect_bridge();
+    fd = connect_bridge();
     if (fd < 0) {
         perror("connect");
         return 1;
     }
 
-    if (write(fd, cmd, strlen(cmd)) < 0) {
-        perror("write");
+    if (strcmp(argv[1], "read") == 0) {
+        if (bridge_write_cstr(fd, "READ\n") != 0) {
+            perror("write");
+            close(fd);
+            return 1;
+        }
+    } else if (strcmp(argv[1], "write") == 0) {
+        const char *text = argc >= 3 ? argv[2] : "";
+        char header[64];
+        snprintf(header, sizeof(header), "WRITE %lu\n", (unsigned long)strlen(text));
+        if (bridge_write_cstr(fd, header) != 0 ||
+            bridge_write_full(fd, text, strlen(text)) != 0) {
+            perror("write");
+            close(fd);
+            return 1;
+        }
+    } else if (strcmp(argv[1], "has") == 0) {
+        if (bridge_write_cstr(fd, "HAS\n") != 0) {
+            perror("write");
+            close(fd);
+            return 1;
+        }
+    } else {
+        fprintf(stderr, "unknown command: %s\n", argv[1]);
+        close(fd);
+        return 2;
+    }
+
+    char line[256];
+    if (bridge_read_line(fd, line, sizeof(line)) != 0) {
+        fprintf(stderr, "failed to read response header\n");
         close(fd);
         return 1;
     }
-
-    char buf[65536];
-    ssize_t n = read(fd, buf, sizeof(buf) - 1);
-    close(fd);
-    if (n < 0) {
-        perror("read");
-        return 1;
+    if (strncmp(line, "DATA ", 5) == 0) {
+        size_t len = 0;
+        char *body;
+        if (bridge_parse_len_header(line, "DATA ", &len) != 0) {
+            fprintf(stderr, "bad DATA header: %s", line);
+            close(fd);
+            return 1;
+        }
+        body = (char *)malloc(len + 1);
+        if (!body) {
+            close(fd);
+            return 1;
+        }
+        if (bridge_read_full(fd, body, len) != 0) {
+            fprintf(stderr, "failed to read DATA body\n");
+            free(body);
+            close(fd);
+            return 1;
+        }
+        body[len] = '\0';
+        printf("%s", body);
+        free(body);
+    } else {
+        printf("%s", line);
     }
-    buf[n] = '\0';
-    printf("%s", buf);
+    close(fd);
     return 0;
 }
