@@ -46,6 +46,7 @@ struct App {
     action_tx: std::sync::mpsc::Sender<TrayAction>,
     paused: Arc<AtomicBool>,
     config: config::ClipSyncConfig,
+    config_path: std::path::PathBuf,
 }
 
 impl App {
@@ -54,6 +55,7 @@ impl App {
         action_tx: std::sync::mpsc::Sender<TrayAction>,
         paused: Arc<AtomicBool>,
         config: config::ClipSyncConfig,
+        config_path: std::path::PathBuf,
     ) -> Self {
         Self {
             tray: None,
@@ -61,6 +63,7 @@ impl App {
             action_tx,
             paused,
             config,
+            config_path,
         }
     }
 }
@@ -118,7 +121,7 @@ impl App {
             if let Err(e) = startup::set_autostart(enabled) {
                 log::error!("Failed to update autostart registry: {}", e);
             }
-            if let Err(e) = self.config.save("clipsync.toml") {
+            if let Err(e) = self.config.save(&self.config_path) {
                 log::error!("Failed to save config: {}", e);
             }
             if let Some(ref mut tray) = self.tray {
@@ -283,8 +286,14 @@ async fn run_sync_loop(
 fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let app_config = config::ClipSyncConfig::load("clipsync.toml")?;
-    log::info!("ClipSync PC starting... port={}", app_config.connection.port);
+    let config_path = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_default()
+        .join("clipsync.toml");
+
+    let app_config = config::ClipSyncConfig::load(&config_path)?;
+    log::info!("ClipSync PC starting... config={}", config_path.display());
 
     if let Err(e) = startup::set_autostart(app_config.general.start_with_windows) {
         log::error!("Failed to sync autostart registry on startup: {}", e);
@@ -311,7 +320,7 @@ fn main() -> anyhow::Result<()> {
         ));
     });
 
-    let mut app = App::new(proxy, action_tx, paused, app_config);
+    let mut app = App::new(proxy, action_tx, paused, app_config, config_path);
     event_loop.set_control_flow(tray_event_loop_control_flow());
     event_loop.run_app(&mut app)?;
 
