@@ -5,6 +5,18 @@ port = 5287
 # Or override the full endpoint:
 # uri = "ws://192.168.0.103:5287/ws"
 
+# Optional static multi-device list. When omitted, ClipSync uses mDNS/LAN
+# discovery and connects to every discovered Android.
+#[[devices]]
+#name = "Phone"
+#uri = "ws://192.168.0.103:5287/ws"
+#enabled = true
+#
+#[[devices]]
+#name = "Tablet"
+#uri = "ws://192.168.0.104:5287/ws"
+#enabled = true
+
 [auth]
 secret = "your-pre-shared-key-here"
 

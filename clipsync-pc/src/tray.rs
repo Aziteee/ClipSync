@@ -1,12 +1,26 @@
 use crate::UiEvent;
 use tray_icon::{
-    menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
     Icon, TrayIcon, TrayIconBuilder,
 };
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnState {
+    Disconnected,
+    Connecting { devices: Vec<DeviceSummary> },
+    Connected { devices: Vec<DeviceSummary> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceSummary {
+    pub name: Option<String>,
+    pub ip: String,
+    pub state: DeviceSummaryState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceSummaryState {
     Disconnected,
     Connecting,
     Connected,
@@ -24,6 +38,8 @@ pub enum TrayAction {
 pub struct Tray {
     tray_icon: TrayIcon,
     _menu: Menu,
+    devices_submenu: Submenu,
+    device_items: Vec<MenuItem>,
     autostart_item: CheckMenuItem,
     conn_state: ConnState,
     paused: bool,
@@ -52,8 +68,8 @@ fn make_icon_data(r: u8, g: u8, b: u8) -> Vec<u8> {
 
 fn icon_for_state(state: ConnState) -> Icon {
     let (r, g, b) = match state {
-        ConnState::Connected => (0, 200, 0),
-        ConnState::Connecting => (200, 200, 0),
+        ConnState::Connected { .. } => (0, 200, 0),
+        ConnState::Connecting { .. } => (200, 200, 0),
         ConnState::Disconnected => (128, 128, 128),
     };
     let rgba = make_icon_data(r, g, b);
@@ -67,6 +83,8 @@ impl Tray {
         start_with_windows: bool,
     ) -> anyhow::Result<Self> {
         let menu = Menu::new();
+        let devices_submenu = Submenu::new("Devices: 0 connected", true);
+        let device_separator = PredefinedMenuItem::separator();
         let reconnect_item = MenuItem::new("Reconnect", true, None);
         let pause_item = MenuItem::new("Pause Sync", true, None);
         let autostart_item =
@@ -75,6 +93,8 @@ impl Tray {
         let update_item = MenuItem::new("Check for Updates", true, None);
         let quit_item = MenuItem::new("Quit", true, None);
 
+        menu.append(&devices_submenu)?;
+        menu.append(&device_separator)?;
         menu.append(&reconnect_item)?;
         menu.append(&pause_item)?;
         menu.append(&autostart_item)?;
@@ -121,6 +141,8 @@ impl Tray {
         Ok(Self {
             tray_icon,
             _menu: menu,
+            devices_submenu,
+            device_items: Vec::new(),
             autostart_item,
             conn_state: ConnState::Disconnected,
             paused: false,
@@ -144,6 +166,7 @@ impl Tray {
     }
 
     fn refresh(&mut self) {
+        self.refresh_device_menu();
         if self.paused {
             let rgba = make_icon_data(255, 165, 0);
             if let Ok(icon) = Icon::from_rgba(rgba, 32, 32) {
@@ -151,15 +174,81 @@ impl Tray {
             }
             let _ = self.tray_icon.set_tooltip(Some("ClipSync \u{b7} Paused"));
         } else {
-            let icon = icon_for_state(self.conn_state);
-            let tooltip = match self.conn_state {
-                ConnState::Connected => "ClipSync \u{b7} Connected",
-                ConnState::Connecting => "ClipSync \u{b7} Connecting\u{2026}",
-                ConnState::Disconnected => "ClipSync \u{b7} Not connected",
+            let icon = icon_for_state(self.conn_state.clone());
+            let tooltip = match &self.conn_state {
+                ConnState::Connected { devices } => {
+                    let connected = connected_device_count(devices);
+                    if connected == 1 {
+                        "ClipSync \u{b7} 1 device connected".to_string()
+                    } else {
+                        format!("ClipSync \u{b7} {} devices connected", connected)
+                    }
+                }
+                ConnState::Connecting { .. } => "ClipSync \u{b7} Connecting\u{2026}".to_string(),
+                ConnState::Disconnected => "ClipSync \u{b7} Not connected".to_string(),
             };
             let _ = self.tray_icon.set_icon(Some(icon));
-            let _ = self.tray_icon.set_tooltip(Some(tooltip));
+            let _ = self.tray_icon.set_tooltip(Some(&tooltip));
         }
     }
 
+    fn refresh_device_menu(&mut self) {
+        for item in self.device_items.drain(..) {
+            let _ = self.devices_submenu.remove(&item);
+        }
+
+        let devices = devices_for_state(&self.conn_state);
+        let connected = connected_device_count(devices);
+        self.devices_submenu
+            .set_text(format!("Devices: {} connected", connected));
+
+        if devices.is_empty() {
+            let item = MenuItem::new("No devices", true, None);
+            let _ = self.devices_submenu.append(&item);
+            self.device_items.push(item);
+            return;
+        }
+
+        for device in devices {
+            let item = MenuItem::new(device_menu_text(device), true, None);
+            let _ = self.devices_submenu.append(&item);
+            self.device_items.push(item);
+        }
+    }
+}
+
+fn devices_for_state(state: &ConnState) -> &[DeviceSummary] {
+    match state {
+        ConnState::Connected { devices } | ConnState::Connecting { devices } => devices,
+        ConnState::Disconnected => &[],
+    }
+}
+
+fn connected_device_count(devices: &[DeviceSummary]) -> usize {
+    devices
+        .iter()
+        .filter(|device| device.state == DeviceSummaryState::Connected)
+        .count()
+}
+
+fn device_menu_text(device: &DeviceSummary) -> String {
+    let name = device
+        .name
+        .as_ref()
+        .map(|name| format!(" - {}", name))
+        .unwrap_or_default();
+    format!(
+        "[{}] {}{}",
+        device_state_text(device.state),
+        device.ip,
+        name
+    )
+}
+
+fn device_state_text(state: DeviceSummaryState) -> &'static str {
+    match state {
+        DeviceSummaryState::Connected => "Connected",
+        DeviceSummaryState::Connecting => "Connecting",
+        DeviceSummaryState::Disconnected => "Disconnected",
+    }
 }

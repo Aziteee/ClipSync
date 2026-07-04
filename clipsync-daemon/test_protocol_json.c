@@ -22,6 +22,17 @@ int main(void) {
     }
     free(text);
 
+    const char *set_with_meta = "{\"type\":\"clipboard_set\",\"text\":\"hello meta\",\"ts\":123,\"event_id\":\"evt-1\",\"origin\":\"pc\",\"device_id\":\"phone\"}";
+    if (protocol_json_type(set_with_meta, strlen(set_with_meta)) != CLIPSYNC_MSG_CLIPBOARD_SET) {
+        failures += fail("clipboard_set with metadata type parse failed");
+    }
+
+    text = protocol_json_get_text(set_with_meta, strlen(set_with_meta));
+    if (!text || strcmp(text, "hello meta") != 0) {
+        failures += fail("clipboard_set with metadata text parse failed");
+    }
+    free(text);
+
     const char *auth = "{\"type\":\"auth\",\"response\":\"abc123\"}";
     char *response = protocol_json_get_auth_response(auth, strlen(auth));
     if (!response || strcmp(response, "abc123") != 0) {

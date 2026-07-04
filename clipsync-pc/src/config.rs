@@ -17,6 +17,8 @@ pub struct ClipSyncConfig {
     pub clipboard: ClipboardConfig,
     #[serde(default)]
     pub general: GeneralConfig,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub devices: Vec<DeviceConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,6 +47,16 @@ pub struct ClipboardConfig {
     pub debounce_ms: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceConfig {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub uri: String,
+    #[serde(default = "default_device_enabled")]
+    pub enabled: bool,
+}
+
 fn default_port() -> u16 {
     5287
 }
@@ -56,6 +68,9 @@ fn default_heartbeat_timeout_ms() -> u64 {
 }
 fn default_debounce_ms() -> u64 {
     300
+}
+fn default_device_enabled() -> bool {
+    true
 }
 
 impl Default for ConnectionConfig {
@@ -167,6 +182,26 @@ debounce_ms = 500
         assert_eq!(cfg.connection.port, 9999);
         assert_eq!(cfg.auth.secret, "test-key");
         assert_eq!(cfg.clipboard.debounce_ms, 500);
+    }
+
+    #[test]
+    fn test_parse_static_devices() {
+        let toml_str = r#"
+[[devices]]
+name = "Phone"
+uri = "ws://192.168.0.10:5287/ws"
+
+[[devices]]
+name = "Tablet"
+uri = "ws://192.168.0.11:5287/ws"
+enabled = false
+"#;
+        let cfg: ClipSyncConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.devices.len(), 2);
+        assert_eq!(cfg.devices[0].name.as_deref(), Some("Phone"));
+        assert_eq!(cfg.devices[0].uri, "ws://192.168.0.10:5287/ws");
+        assert!(cfg.devices[0].enabled);
+        assert!(!cfg.devices[1].enabled);
     }
 
     #[test]
