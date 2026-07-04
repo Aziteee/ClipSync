@@ -20,7 +20,7 @@ ClipSync 是一个局域网剪贴板同步项目，用于在 Windows PC 和 Andr
 ### Android
 
 1. 确保已安装 Zygisk
-2. 在 KernelSU 管理器中刷入 `clipsyncd-module.zip`
+2. 在 Root 管理器中刷入 `clipsyncd-module.zip` 模块
 3. 重启手机
 
 ### PC
@@ -35,7 +35,7 @@ ClipSync 是一个局域网剪贴板同步项目，用于在 Windows PC 和 Andr
 
 ### Android
 
-配置文件路径：`/data/adb/modules/clipsyncd/config/clipsync.toml`
+配置文件路径：`/data/adb/clipsyncd/clipsync.toml`
 
 ```toml
 [connection]
@@ -48,7 +48,7 @@ secret = ""
 debounce_ms = 300
 ```
 
-修改后重启手机，或手动重启 `clipsyncd`。
+修改后在 Root 管理器中点击模块的 Action 按钮重启服务即可生效，无需重启。
 
 ### PC
 
