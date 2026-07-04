@@ -18,45 +18,19 @@
 #include "../../bridge_protocol.h"
 #include <jni.h>
 #include <android/log.h>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cerrno>
-#include <cstdarg>
-#include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 #include <pthread.h>
 
 #define TAG "ClipSyncBridge"
-#define LOG_PATH "/data/adb/modules/clipsyncd/bridge.log"
 
-static void kmsg_log(const char *fmt, ...) {
-    int fd = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
-    if (fd < 0) return;
-    char buf[512];
-    va_list ap;
-    va_start(ap, fmt);
-    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
-    va_end(ap);
-    if (n > 0) {
-        if (n >= (int)sizeof(buf)) n = (int)sizeof(buf) - 1;
-        write(fd, buf, n);
-        write(fd, "\n", 1);
-    }
-    close(fd);
-}
-
-#define LOGD(...) do { \
-    __android_log_print(ANDROID_LOG_DEBUG, TAG, __VA_ARGS__); \
-    kmsg_log(__VA_ARGS__); \
-    FILE *f = fopen(LOG_PATH, "a"); \
-    if (f) { fprintf(f, __VA_ARGS__); fprintf(f, "\n"); fclose(f); } \
-} while(0)
-#define LOGE(...) LOGD("ERROR: " __VA_ARGS__)
+#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, TAG, __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
 /* Abstract Unix socket: no filesystem path, no init/SELinux path labels.
  * sun_path[0] == '\0', actual name follows. */
@@ -120,16 +94,6 @@ static jfieldID get_field(jclass cls, const char *name, const char *sig) {
         return nullptr;
     }
     return field;
-}
-
-static void log_cmdline(const char *prefix) {
-    FILE *f = fopen("/proc/self/cmdline", "r");
-    if (!f) { LOGD("%s: cannot open /proc/self/cmdline", prefix); return; }
-    char buf[256] = {0};
-    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
-    fclose(f);
-    for (size_t i = 0; i < n; i++) if (buf[i] == '\0') buf[i] = ' ';
-    LOGD("%s: cmdline=[%s]", prefix, buf);
 }
 
 /* --- JNI: Call local ClipboardService --- */
@@ -620,16 +584,10 @@ public:
 
     void preServerSpecialize(ServerSpecializeArgs *args) override {
         (void)args;
-        LOGD("preServerSpecialize called");
-        log_cmdline("preServerSpecialize");
-        /* Still in zygote here; do not access system_server services yet. */
     }
 
     void postServerSpecialize(const ServerSpecializeArgs *args) override {
         (void)args;
-        LOGD("postServerSpecialize called");
-        log_cmdline("postServerSpecialize");
-        /* We are now running inside system_server. Start the bridge socket. */
         pthread_t t;
         pthread_create(&t, nullptr, socket_thread, nullptr);
         pthread_detach(t);
