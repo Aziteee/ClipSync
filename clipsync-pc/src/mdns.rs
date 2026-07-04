@@ -58,7 +58,7 @@ pub fn discover(port: u16) -> anyhow::Result<tokio_mpsc::UnboundedReceiver<Strin
         }
     }
 
-    spawn_lan_scan(tx, port);
+    let _ = port;
     Ok(rx)
 }
 

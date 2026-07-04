@@ -442,7 +442,7 @@ static uint8_t *build_a_record(struct mg_connection *c, uint8_t *p,
     memset(&loc, 0, sizeof(loc));
     to.is_ip6 = false;
     to.port = mg_htons(5353);
-    to.addr.ip4 = MG_IPV4(224, 0, 0, 51);
+    to.addr.ip4 = MG_IPV4(224, 0, 0, 251);
     mg_getlocaddr(c, &to, &loc);
     memcpy(p, &loc.addr.ip4, 4), p += 4;
 #endif

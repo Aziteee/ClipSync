@@ -111,6 +111,7 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "[clipsyncd] mdns_publish_init failed\n");
         return 1;
     }
+    mdns_publish_announce();
 
     if (clip_bridge_init() != 0) {
         fprintf(stderr, "[clipsyncd] clip_bridge_init failed\n");
@@ -131,13 +132,22 @@ int main(int argc, char *argv[]) {
     /* Event loop */
     int clipboard_poll_ticks = 0;
     int status_update_ticks = 0;
+    int mdns_announce_ticks = 0;
     while (running) {
+        size_t authenticated_count;
         ws_server_poll(50);
+        authenticated_count = ws_server_authenticated_count();
         if (++status_update_ticks >= 100) {
             status_update_ticks = 0;
             update_module_status(&cfg);
         }
-        int poll_every_ticks = clipsync_clipboard_poll_ticks_for_clients(ws_server_authenticated_count(), cfg.debounce_ms);
+        if (authenticated_count == 0 && ++mdns_announce_ticks >= 600) {
+            mdns_announce_ticks = 0;
+            mdns_publish_announce();
+        } else if (authenticated_count > 0) {
+            mdns_announce_ticks = 0;
+        }
+        int poll_every_ticks = clipsync_clipboard_poll_ticks_for_clients(authenticated_count, cfg.debounce_ms);
         if (++clipboard_poll_ticks >= poll_every_ticks) {
             clipboard_poll_ticks = 0;
             poll_clipboard_change();
