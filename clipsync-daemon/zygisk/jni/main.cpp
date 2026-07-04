@@ -281,12 +281,19 @@ static jobject readClipboardDirect(jobject impl) {
         g_env->DeleteLocalRef(service);
         return nullptr;
     }
-    jfieldID clipboardsField = get_field(serviceClass, "mClipboards", "Landroid/util/SparseArrayMap;");
+
+    jfieldID clipboardsField = g_env->GetFieldID(serviceClass, "mClipboards", "Landroid/util/SparseArray;");
+    bool useSparseArray = (clipboardsField != nullptr);
+    if (!useSparseArray) {
+        jni_clear_exception("mClipboards SparseArray probe");
+        clipboardsField = g_env->GetFieldID(serviceClass, "mClipboards", "Landroid/util/SparseArrayMap;");
+    }
     if (!clipboardsField) {
+        jni_clear_exception("mClipboards SparseArrayMap probe");
         logClassFields(serviceClass, "ClipboardService");
         g_env->DeleteLocalRef(serviceClass);
         g_env->DeleteLocalRef(service);
-        LOGE("readClipboardDirect: mClipboards not found");
+        LOGE("readClipboardDirect: mClipboards not found (neither SparseArray nor SparseArrayMap)");
         return nullptr;
     }
 
@@ -299,28 +306,38 @@ static jobject readClipboardDirect(jobject impl) {
         return nullptr;
     }
 
-    jclass integerClass = find_class("java/lang/Integer");
-    if (!integerClass) { g_env->DeleteLocalRef(clipboards); return nullptr; }
-    jmethodID valueOf = get_static_method(integerClass, "valueOf", "(I)Ljava/lang/Integer;");
-    if (!valueOf) { g_env->DeleteLocalRef(integerClass); g_env->DeleteLocalRef(clipboards); return nullptr; }
-    jobject deviceId = g_env->CallStaticObjectMethod(integerClass, valueOf, (jint)0);
-    if (!jni_ok("Integer.valueOf")) deviceId = nullptr;
-    jclass sparseMapClass = find_class("android/util/SparseArrayMap");
-    if (!deviceId || !sparseMapClass) {
-        if (sparseMapClass) g_env->DeleteLocalRef(sparseMapClass);
-        if (deviceId) g_env->DeleteLocalRef(deviceId);
-        g_env->DeleteLocalRef(integerClass);
-        g_env->DeleteLocalRef(clipboards);
-        return nullptr;
+    jobject perUser = nullptr;
+    if (useSparseArray) {
+        jclass saClass = find_class("android/util/SparseArray");
+        if (saClass) {
+            jmethodID getMethod = g_env->GetMethodID(saClass, "get", "(I)Ljava/lang/Object;");
+            if (!getMethod) jni_clear_exception("SparseArray.get");
+            perUser = getMethod ? g_env->CallObjectMethod(clipboards, getMethod, (jint)0) : nullptr;
+            if (!jni_ok("SparseArray.get")) perUser = nullptr;
+            g_env->DeleteLocalRef(saClass);
+        }
+    } else {
+        jclass integerClass = find_class("java/lang/Integer");
+        if (integerClass) {
+            jmethodID valueOf = get_static_method(integerClass, "valueOf", "(I)Ljava/lang/Integer;");
+            if (valueOf) {
+                jobject deviceId = g_env->CallStaticObjectMethod(integerClass, valueOf, (jint)0);
+                if (jni_ok("Integer.valueOf")) {
+                    jclass smClass = find_class("android/util/SparseArrayMap");
+                    if (smClass) {
+                        jmethodID getMethod = g_env->GetMethodID(smClass, "get", "(ILjava/lang/Object;)Ljava/lang/Object;");
+                        if (!getMethod) jni_clear_exception("SparseArrayMap.get");
+                        perUser = getMethod ? g_env->CallObjectMethod(clipboards, getMethod, (jint)0, deviceId) : nullptr;
+                        if (!jni_ok("SparseArrayMap.get")) perUser = nullptr;
+                        g_env->DeleteLocalRef(smClass);
+                    }
+                }
+                g_env->DeleteLocalRef(deviceId);
+            }
+            g_env->DeleteLocalRef(integerClass);
+        }
     }
-    jmethodID getMethod = get_method(sparseMapClass, "get", "(ILjava/lang/Object;)Ljava/lang/Object;");
-    jobject perUser = getMethod ? g_env->CallObjectMethod(clipboards, getMethod, (jint)0, deviceId) : nullptr;
-    if (!jni_ok("SparseArrayMap.get")) {
-        perUser = nullptr;
-    }
-    g_env->DeleteLocalRef(sparseMapClass);
-    g_env->DeleteLocalRef(deviceId);
-    g_env->DeleteLocalRef(integerClass);
+
     g_env->DeleteLocalRef(clipboards);
     if (!perUser) {
         LOGE("readClipboardDirect: user 0 clipboard state is null");
@@ -333,8 +350,10 @@ static jobject readClipboardDirect(jobject impl) {
         g_env->DeleteLocalRef(perUser);
         return nullptr;
     }
-    jfieldID primaryClipField = get_field(perUserClass, "primaryClip", "Landroid/content/ClipData;");
+    jfieldID primaryClipField = g_env->GetFieldID(perUserClass, "primaryClip", "Landroid/content/ClipData;");
     if (!primaryClipField) {
+        jni_clear_exception("primaryClip probe");
+        logClassFields(perUserClass, "PerUserState");
         g_env->DeleteLocalRef(perUserClass);
         g_env->DeleteLocalRef(perUser);
         LOGE("readClipboardDirect: primaryClip not found");
@@ -363,29 +382,31 @@ static char *readClipboard() {
         jni_clear_exception("getPrimaryClip modern lookup");
         modern_api = false;
         m = g_env->GetMethodID(iclip, "getPrimaryClip", "(Ljava/lang/String;I)Landroid/content/ClipData;");
+        if (!m) {
+            jni_clear_exception("getPrimaryClip legacy lookup");
+        }
     }
-    if (!m || !jni_ok("getPrimaryClip legacy lookup")) { LOGE("readClipboard: getPrimaryClip method not found"); g_env->DeleteLocalRef(iclip); g_env->DeleteLocalRef(svc); return nullptr; }
-    jstring pkg = g_env->NewStringUTF(kClipboardCallerPackage);
-    if (!pkg || !jni_ok("NewStringUTF read package")) { g_env->DeleteLocalRef(iclip); g_env->DeleteLocalRef(svc); return nullptr; }
-    jobject cd = modern_api
-        ? g_env->CallObjectMethod(svc, m, pkg, nullptr, (jint)0, (jint)0)
-        : g_env->CallObjectMethod(svc, m, pkg, (jint)0);
-    if (!jni_ok("IClipboard.getPrimaryClip")) {
-        cd = nullptr;
+    jobject cd = nullptr;
+    if (m) {
+        jstring pkg = g_env->NewStringUTF(kClipboardCallerPackage);
+        if (pkg && jni_ok("NewStringUTF read package")) {
+            cd = modern_api
+                ? g_env->CallObjectMethod(svc, m, pkg, nullptr, (jint)0, (jint)0)
+                : g_env->CallObjectMethod(svc, m, pkg, (jint)0);
+            if (!jni_ok("IClipboard.getPrimaryClip")) {
+                cd = nullptr;
+            }
+        }
+        if (pkg) g_env->DeleteLocalRef(pkg);
     }
-    g_env->DeleteLocalRef(pkg);
-
-    bool direct = false;
-    if (!cd) {
+    if (!cd && !m) {
         cd = readClipboardDirect(svc);
-        direct = cd != nullptr;
     }
 
     char *result = clipDataToText(cd);
     if (cd) {
         g_env->DeleteLocalRef(cd);
     }
-    if (direct && result) LOGD("readClipboard: direct fallback returned %zu chars", strlen(result));
     g_env->DeleteLocalRef(iclip); g_env->DeleteLocalRef(svc);
     return result;
 }
@@ -406,8 +427,11 @@ static bool writeClipboard(const char *text) {
         jni_clear_exception("setPrimaryClip modern lookup");
         modern_api = false;
         m = g_env->GetMethodID(iclip, "setPrimaryClip", "(Landroid/content/ClipData;Ljava/lang/String;I)V");
+        if (!m) {
+            jni_clear_exception("setPrimaryClip legacy lookup");
+        }
     }
-    if (!m || !jni_ok("setPrimaryClip legacy lookup")) { LOGE("writeClipboard: setPrimaryClip method not found"); g_env->DeleteLocalRef(iclip); g_env->DeleteLocalRef(svc); return false; }
+    if (!m) { LOGE("writeClipboard: setPrimaryClip method not found"); g_env->DeleteLocalRef(iclip); g_env->DeleteLocalRef(svc); return false; }
     jclass cd = find_class("android/content/ClipData");
     if (!cd) { g_env->DeleteLocalRef(iclip); g_env->DeleteLocalRef(svc); return false; }
     jmethodID npt = get_static_method(cd, "newPlainText", "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/content/ClipData;");
