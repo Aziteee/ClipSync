@@ -30,7 +30,19 @@ $env:PATH = "$env:ANDROID_NDK_ROOT;" +
             "$env:PATH"
 $env:CC = "aarch64-linux-android33-clang"
 make module
+
+### 打包为 zip（分发包）
+
+```powershell
+$env:ANDROID_NDK_ROOT = "D:\AppData\Android\sdk\ndk\30.0.14904198"
+$env:PATH = "$env:ANDROID_NDK_ROOT\toolchains\llvm\prebuilt\windows-x86_64\bin;" +
+            "$env:ANDROID_NDK_ROOT\prebuilt\windows-x86_64\bin;" +
+            "$env:PATH"
+$env:CC = "aarch64-linux-android33-clang"
+make package
 ```
+
+输出到 `clipsync-daemon/dist/clipsyncd-module.zip`。
 
 ### 注意：验证 zygisk .so 是否真的被更新
 
