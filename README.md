@@ -4,7 +4,7 @@ ClipSync 是一个局域网剪贴板同步项目，用于在 Windows PC 和 Andr
 
 ## 功能
 
-- PC 与 Android 双向同步文本剪贴板
+- PC 与多台 Android 设备双向同步文本剪贴板
 - 预共享密钥认证
 - mDNS 自动发现，无感连接
 - Windows 托盘状态显示
@@ -57,8 +57,16 @@ debounce_ms = 300
 ```toml
 [connection]
 port = 5287
-# 若 mDNS 自动发现不可用，填写手机 IP：
-# host = "192.168.0.103"
+
+# 若 mDNS 自动发现不可用，手动指定设备（可选）
+# [[devices]]
+# name = "手机"
+# uri = "ws://192.168.0.10:5287/ws"
+#
+# [[devices]]
+# name = "平板"
+# uri = "ws://192.168.0.11:5287/ws"
+# enabled = false
 
 [auth]
 secret = ""
@@ -76,12 +84,15 @@ debounce_ms = 300
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
 | `connection.port` | `5287` | WebSocket 端口 |
-| `connection.host` | 自动发现 | 手动指定手机 IP（PC 端） |
-| `connection.uri` | 自动发现 | 手动指定 WebSocket URI（PC 端） |
+| `connection.host` | 自动发现 | 手动指定手机 IP（旧写法，仅限单设备） |
+| `connection.uri` | 自动发现 | 手动指定 WebSocket URI（旧写法，仅限单设备） |
 | `connection.heartbeat_interval_ms` | `5000` | 心跳发送间隔（毫秒，PC 端） |
 | `connection.heartbeat_timeout_ms` | `15000` | 心跳超时时间（毫秒，PC 端） |
 | `auth.secret` | `""` | 预共享密钥，为空则不校验 |
 | `clipboard.debounce_ms` | `300` | 去抖间隔（毫秒） |
+| `devices[].name` | 无 | 设备显示名称（可选，PC 端） |
+| `devices[].uri` | 无 | 设备 WebSocket 地址（PC 端） |
+| `devices[].enabled` | `true` | 是否启用该设备（PC 端） |
 
 ## 开发
 
@@ -122,4 +133,5 @@ make package
 
 ## 注意
 
+- 配置 `[[devices]]` 后，PC 将跳过 mDNS 自动发现，仅连接列表中启用（`enabled = true`）的设备。
 - 仅在 Windows 11 及 Android 16 (ColorOS) 环境测试成功，其他环境不保证正常运行。
