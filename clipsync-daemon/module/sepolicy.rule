@@ -1,2 +1,0 @@
-# No direct ksu -> clipboard_service Binder access is required by the main sync path.
-# clipsyncd talks to the Zygisk bridge over @clipbridge; IClipboard calls happen inside system_server.
