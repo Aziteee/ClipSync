@@ -92,9 +92,7 @@ struct DeviceHandle {
 }
 
 fn should_retry_failed_endpoint(origin: DeviceOrigin) -> bool {
-    match origin {
-        DeviceOrigin::Static | DeviceOrigin::Discovered => true,
-    }
+    origin == DeviceOrigin::Static
 }
 
 fn heartbeat_is_stale(idle_for: Duration, timeout: Duration) -> bool {
@@ -903,9 +901,9 @@ mod tests {
     }
 
     #[test]
-    fn discovered_endpoints_are_retried_after_transient_disconnects() {
+    fn discovered_endpoints_are_not_retried_forever() {
         assert!(should_retry_failed_endpoint(DeviceOrigin::Static));
-        assert!(should_retry_failed_endpoint(DeviceOrigin::Discovered));
+        assert!(!should_retry_failed_endpoint(DeviceOrigin::Discovered));
     }
 
     #[test]
