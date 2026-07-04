@@ -30,6 +30,7 @@ $env:PATH = "$env:ANDROID_NDK_ROOT;" +
             "$env:PATH"
 $env:CC = "aarch64-linux-android33-clang"
 make module
+```
 
 ### 打包为 zip（分发包）
 

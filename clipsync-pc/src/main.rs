@@ -80,6 +80,9 @@ enum DeviceEvent {
         event_id: String,
         error: String,
     },
+    Finished {
+        id: DeviceId,
+    },
 }
 
 struct DeviceHandle {
@@ -89,8 +92,8 @@ struct DeviceHandle {
     last_error: Option<String>,
 }
 
-fn should_retry_failed_endpoint(_origin: DeviceOrigin) -> bool {
-    true
+fn should_retry_failed_endpoint(origin: DeviceOrigin) -> bool {
+    origin == DeviceOrigin::Static
 }
 
 fn heartbeat_is_stale(idle_for: Duration, timeout: Duration) -> bool {
@@ -542,6 +545,9 @@ async fn run_device_task(
         }
 
         if !should_retry_failed_endpoint(target.origin) {
+            let _ = event_tx.send(DeviceEvent::Finished {
+                id: target.id.clone(),
+            });
             break;
         }
 
@@ -833,6 +839,18 @@ async fn run_sync_loop(
                         log::warn!("Device send failed: id={} event={} error={}", id, event_id, error);
                         preserve_text_after_send_failure(&mut engine, &id, text);
                     }
+                    DeviceEvent::Finished { id } => {
+                        if handles
+                            .get(&id)
+                            .is_some_and(|handle| handle.target.origin == DeviceOrigin::Discovered)
+                        {
+                            let _ = engine.take_pending_for(&id);
+                            if let Some(handle) = handles.remove(&id) {
+                                log::info!("Removed failed discovered device: {}", handle.target.uri);
+                            }
+                            send_aggregate_state(&proxy, &handles);
+                        }
+                    }
                 }
             }
             action = action_rx.recv(), if !actions_closed => {
@@ -955,6 +973,12 @@ mod tests {
     fn reconnect_action_interrupts_waits() {
         assert!(reconnect_interrupts_wait(TrayAction::Reconnect));
         assert!(!reconnect_interrupts_wait(TrayAction::TogglePause));
+    }
+
+    #[test]
+    fn discovered_endpoints_are_not_retried_forever() {
+        assert!(should_retry_failed_endpoint(DeviceOrigin::Static));
+        assert!(!should_retry_failed_endpoint(DeviceOrigin::Discovered));
     }
 
     #[test]
