@@ -60,7 +60,7 @@ module: $(TARGET) $(ZYGISK_SO) $(CONFIG_SRC)
 	@echo Check: adb logcat -s ClipSyncBridge clipsyncd
 
 package: module
-	@powershell -NoProfile -ExecutionPolicy Bypass -Command "if (Test-Path 'module\initrc\clipsyncd.rc') { throw 'Refusing to package deprecated module/initrc/clipsyncd.rc' }; if ([Convert]::ToBase64String([Security.Cryptography.MD5]::Create().ComputeHash([IO.File]::ReadAllBytes('$(ZYGISK_BUILD_SO)'))) -ne [Convert]::ToBase64String([Security.Cryptography.MD5]::Create().ComputeHash([IO.File]::ReadAllBytes('$(ZYGISK_SO)')))) { Copy-Item -Path '$(ZYGISK_BUILD_SO)' -Destination '$(ZYGISK_SO)' -Force }; if (!(Test-Path '$(DIST_DIR)')) { New-Item -ItemType Directory -Path '$(DIST_DIR)' | Out-Null }; if (Test-Path '$(PACKAGE)') { Remove-Item '$(PACKAGE)' -Force }; Compress-Archive -Path 'module\*' -DestinationPath '$(PACKAGE)' -Force"
+	@powershell -NoProfile -ExecutionPolicy Bypass -Command "if ([Convert]::ToBase64String([Security.Cryptography.MD5]::Create().ComputeHash([IO.File]::ReadAllBytes('$(ZYGISK_BUILD_SO)'))) -ne [Convert]::ToBase64String([Security.Cryptography.MD5]::Create().ComputeHash([IO.File]::ReadAllBytes('$(ZYGISK_SO)')))) { Copy-Item -Path '$(ZYGISK_BUILD_SO)' -Destination '$(ZYGISK_SO)' -Force }; if (!(Test-Path '$(DIST_DIR)')) { New-Item -ItemType Directory -Path '$(DIST_DIR)' | Out-Null }; if (Test-Path '$(PACKAGE)') { Remove-Item '$(PACKAGE)' -Force }; Compress-Archive -Path 'module\*' -DestinationPath '$(PACKAGE)' -Force"
 	@echo ========================================
 	@echo KernelSU module package ready:
 	@echo   $(PACKAGE)

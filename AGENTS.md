@@ -78,10 +78,7 @@ adb shell "su -c 'cp -r /data/local/tmp/clipsyncd-module /data/adb/modules/clips
 # 4. 验证结构
 adb shell "su -c 'cd /data/adb/modules/clipsyncd && find . -maxdepth 2 | sort'"
 
-# 5. 安全检查：当前版本不应再包含 initrc/clipsyncd.rc
-adb shell "su -c 'test ! -e /data/adb/modules/clipsyncd/initrc/clipsyncd.rc && echo no initrc rc'"
-
-# 6. 重启
+# 5. 重启
 adb reboot
 ```
 
@@ -147,9 +144,8 @@ adb shell "su -c 'pkill clipsyncd; /data/adb/modules/clipsyncd/system/bin/clipsy
 
 ### 已知风险点
 
-1. **不要恢复 `module/initrc/clipsyncd.rc`**：它会把 daemon 交给 Android `init` 管理，曾与 `service.sh` 双启动并增加软重启排查难度。
-2. **`make module` 后必须核对 Zygisk `.so` MD5**：PowerShell 下 `copy /Y` 仍可能显示成功但没有覆盖。
-3. **纯 mDNS multicast 仍可能不通**：Android 端 UDP `5353` socket 存在，但当前网络里 PC multicast 查询未到达手机；若要恢复纯 mDNS，优先从 Windows 防火墙/网络 multicast/AP 隔离方向查。
-4. **PC 自动发现依赖 LAN unicast fallback 兜底**：`clipsync-pc/clipsync.toml` 当前不配置 `host`/`uri`。fallback 会探测同 `/24` 地址并要求 ClipSync WebSocket `hello`，可以过滤其他开放 `5287` 的服务。
-5. **Zygisk bridge 读取依赖 ColorOS/Android 内部字段**：当前读取 fallback 使用 `ClipboardService.mClipboards` 的 `SparseArrayMap` 结构。系统升级后若字段结构变化，需要重新用 logcat 字段枚举确认。
+1. **`make module` 后必须核对 Zygisk `.so` MD5**：PowerShell 下 `copy /Y` 仍可能显示成功但没有覆盖。
+2. **纯 mDNS multicast 仍可能不通**：Android 端 UDP `5353` socket 存在，但当前网络里 PC multicast 查询未到达手机；若要恢复纯 mDNS，优先从 Windows 防火墙/网络 multicast/AP 隔离方向查。
+3. **PC 自动发现依赖 LAN unicast fallback 兜底**：`clipsync-pc/clipsync.toml` 当前不配置 `host`/`uri`。fallback 会探测同 `/24` 地址并要求 ClipSync WebSocket `hello`，可以过滤其他开放 `5287` 的服务。
+4. **Zygisk bridge 读取依赖 ColorOS/Android 内部字段**：当前读取 fallback 使用 `ClipboardService.mClipboards` 的 `SparseArrayMap` 结构。系统升级后若字段结构变化，需要重新用 logcat 字段枚举确认。
 
