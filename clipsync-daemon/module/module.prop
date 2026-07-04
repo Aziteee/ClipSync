@@ -1,7 +1,7 @@
 id=clipsyncd
 name=ClipSync Daemon
-version=v1.2.0
-versionCode=3
+version=v1.3.0
+versionCode=4
 author=Aziteee
 description=ClipSync clipboard sync daemon with Zygisk bridge
 updateJson=https://raw.githubusercontent.com/Aziteee/ClipSync/master/update.json
