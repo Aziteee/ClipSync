@@ -2,11 +2,6 @@
 
 ClipSync 是一个局域网剪贴板同步项目，用于在 Windows PC 和 Android 设备之间同步文本剪贴板。
 
-## 项目结构
-
-- `clipsync-pc/`：Windows 托盘客户端，负责监听/写入 PC 剪贴板，并连接 Android 端 WebSocket 服务。
-- `clipsync-daemon/`：Android 端 KernelSU/Zygisk 模块和 `clipsyncd` 守护进程，负责通过 Zygisk bridge 访问 Android 剪贴板并提供同步服务。
-
 ## 功能
 
 - PC 与 Android 双向同步文本剪贴板
@@ -15,24 +10,32 @@ ClipSync 是一个局域网剪贴板同步项目，用于在 Windows PC 和 Andr
 - Windows 托盘状态显示
 - 轻量，对性能无影响
 
-## 使用指南
+## 快速开始
 
-从项目的 Release 页面下载：
+从 [Release](https://github.com/Aziteee/ClipSync/releases) 页面下载：
 
-- Windows 客户端：`clipsync-pc.exe`
-- Android 模块：`clipsyncd-module.zip`
+- **PC**：`clipsync-pc.exe`
+- **Android**：`clipsyncd-module.zip`
 
-### Android 端
+### Android
 
-确保你已有 `Zygisk` 环境，然后在 KernelSU 管理器中安装 `clipsyncd-module.zip`，重启手机。
+1. 确保已安装 Zygisk
+2. 在 KernelSU 管理器中刷入 `clipsyncd-module.zip`
+3. 重启手机
 
-Android 模块会读取：
+### PC
 
-```text
-/data/adb/modules/clipsyncd/config/clipsync.toml
-```
+双击 `clipsync-pc.exe`，任务栏出现图标即开始同步。
 
-默认配置如下：
+> 确保 PC 和手机在同一局域网。
+
+## 配置
+
+以下为默认配置，**开箱即用**。如需自定义，可创建配置文件。
+
+### Android
+
+配置文件路径：`/data/adb/modules/clipsyncd/config/clipsync.toml`
 
 ```toml
 [connection]
@@ -45,18 +48,16 @@ secret = ""
 debounce_ms = 300
 ```
 
-如果需要修改端口或认证密钥，编辑该文件后重启手机，或手动重启 `clipsyncd`。
+修改后重启手机，或手动重启 `clipsyncd`。
 
-### PC 端
+### PC
 
-将 `clipsync-pc.exe` 放到一个单独目录中，双击打开即可。
-
-如果需要修改端口或认证密钥，请在同目录创建 `clipsync.toml`：
+配置文件路径：与 `clipsync-pc.exe` 同目录的 `clipsync.toml`
 
 ```toml
 [connection]
 port = 5287
-# 如果自动发现不可用，取消下面一行注释并填写手机 IP：
+# 若 mDNS 自动发现不可用，填写手机 IP：
 # host = "192.168.0.103"
 
 [auth]
@@ -66,11 +67,28 @@ secret = ""
 debounce_ms = 300
 ```
 
-之后重新运行 `clipsync-pc.exe` 即可。
+修改后重启 `clipsync-pc.exe`。
 
-PC 端的 `port` 和 `secret` 需要与 Android 端保持一致。
+> PC 与 Android 的 `port` 和 `secret` 必须一致。
+
+### 配置项说明
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `connection.port` | `5287` | WebSocket 端口 |
+| `connection.host` | 自动发现 | 手动指定手机 IP（PC 端） |
+| `connection.uri` | 自动发现 | 手动指定 WebSocket URI（PC 端） |
+| `connection.heartbeat_interval_ms` | `5000` | 心跳发送间隔（毫秒，PC 端） |
+| `connection.heartbeat_timeout_ms` | `15000` | 心跳超时时间（毫秒，PC 端） |
+| `auth.secret` | `""` | 预共享密钥，为空则不校验 |
+| `clipboard.debounce_ms` | `300` | 去抖间隔（毫秒） |
 
 ## 开发
+
+项目结构：
+
+- `clipsync-pc/`：Windows 托盘客户端，负责监听/写入 PC 剪贴板，并连接 Android 端 WebSocket 服务。
+- `clipsync-daemon/`：Android 端 KernelSU/Zygisk 模块和 `clipsyncd` 守护进程，负责通过 Zygisk bridge 访问 Android 剪贴板并提供同步服务。
 
 环境要求：
 
