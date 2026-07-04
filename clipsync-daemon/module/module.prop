@@ -4,3 +4,4 @@ version=v1.2.0
 versionCode=3
 author=Aziteee
 description=ClipSync clipboard sync daemon with Zygisk bridge
+updateJson=https://raw.githubusercontent.com/Aziteee/ClipSync/main/update.json
