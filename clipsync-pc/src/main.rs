@@ -7,6 +7,7 @@ mod protocol;
 mod startup;
 mod sync;
 mod tray;
+mod update;
 mod ws;
 
 use std::path::{Path, PathBuf};
@@ -48,6 +49,7 @@ struct App {
     paused: Arc<AtomicBool>,
     config: config::ClipSyncConfig,
     config_path: std::path::PathBuf,
+    tokio_handle: tokio::runtime::Handle,
 }
 
 impl App {
@@ -57,6 +59,7 @@ impl App {
         paused: Arc<AtomicBool>,
         config: config::ClipSyncConfig,
         config_path: std::path::PathBuf,
+        tokio_handle: tokio::runtime::Handle,
     ) -> Self {
         Self {
             tray: None,
@@ -65,6 +68,7 @@ impl App {
             paused,
             config,
             config_path,
+            tokio_handle,
         }
     }
 }
@@ -132,6 +136,23 @@ impl App {
             if let Some(ref mut tray) = self.tray {
                 tray.set_start_with_windows(enabled);
             }
+            return;
+        }
+        if matches!(action, TrayAction::CheckForUpdates) {
+            self.tokio_handle.spawn(async move {
+                match update::check_for_updates().await {
+                    update::CheckResult::UpdateAvailable => {
+                        log::info!("Update available, opening browser");
+                        update::open_releases_page();
+                    }
+                    update::CheckResult::UpToDate => {
+                        log::info!("Already up to date");
+                    }
+                    update::CheckResult::Error => {
+                        log::warn!("Update check failed");
+                    }
+                }
+            });
             return;
         }
         let _ = self.action_tx.send(action);
@@ -435,11 +456,13 @@ fn main() -> anyhow::Result<()> {
 
     let paused = Arc::new(AtomicBool::new(false));
 
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let tokio_handle = rt.handle().clone();
+
     let cfg_clone = cfg.clone();
     let proxy_clone = proxy.clone();
     let paused_clone = paused.clone();
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(run_sync_loop(
             cfg_clone,
             proxy_clone,
@@ -448,7 +471,7 @@ fn main() -> anyhow::Result<()> {
         ));
     });
 
-    let mut app = App::new(proxy, action_tx, paused, app_config, config_path);
+    let mut app = App::new(proxy, action_tx, paused, app_config, config_path, tokio_handle);
     event_loop.set_control_flow(tray_event_loop_control_flow());
     event_loop.run_app(&mut app)?;
 

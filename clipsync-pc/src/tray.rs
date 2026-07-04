@@ -17,6 +17,7 @@ pub enum TrayAction {
     Reconnect,
     TogglePause,
     ToggleStartWithWindows,
+    CheckForUpdates,
     Quit,
 }
 
@@ -71,12 +72,14 @@ impl Tray {
         let autostart_item =
             CheckMenuItem::new("Start with Windows", true, start_with_windows, None);
         let separator = PredefinedMenuItem::separator();
+        let update_item = MenuItem::new("Check for Updates", true, None);
         let quit_item = MenuItem::new("Quit", true, None);
 
         menu.append(&reconnect_item)?;
         menu.append(&pause_item)?;
         menu.append(&autostart_item)?;
         menu.append(&separator)?;
+        menu.append(&update_item)?;
         menu.append(&quit_item)?;
 
         let icon = icon_for_state(ConnState::Disconnected);
@@ -89,6 +92,7 @@ impl Tray {
         let reconnect_id = reconnect_item.id().clone();
         let pause_id = pause_item.id().clone();
         let autostart_id = autostart_item.id().clone();
+        let update_id = update_item.id().clone();
         let quit_id = quit_item.id().clone();
 
         std::thread::spawn(move || loop {
@@ -99,6 +103,8 @@ impl Tray {
                     Some(TrayAction::TogglePause)
                 } else if event.id == autostart_id {
                     Some(TrayAction::ToggleStartWithWindows)
+                } else if event.id == update_id {
+                    Some(TrayAction::CheckForUpdates)
                 } else if event.id == quit_id {
                     Some(TrayAction::Quit)
                 } else {
@@ -155,4 +161,5 @@ impl Tray {
             let _ = self.tray_icon.set_tooltip(Some(tooltip));
         }
     }
+
 }
