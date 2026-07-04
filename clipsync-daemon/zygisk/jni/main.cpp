@@ -8,8 +8,8 @@
  *   → clipsyncd connects to the socket to read/write clipboard
  *
  * Zygisk lifecycle (critical):
- *   onLoad              : called in the zygote process (NOT system_server)
- *   preServerSpecialize : called in zygote BEFORE becoming system_server
+ *   onLoad              : called after zygote forks the target child process
+ *   preServerSpecialize : called before the child becomes system_server
  *   postServerSpecialize: called AFTER this process has become system_server
  * Therefore the socket MUST be started in postServerSpecialize, and the
  * socket thread must AttachCurrentThread because JNIEnv is thread-local.
@@ -63,11 +63,13 @@ static void kmsg_log(const char *fmt, ...) {
 #define SOCK_ABSTRACT_NAME "clipbridge"
 static constexpr const char *kClipboardCallerPackage = "android";
 
-using zygisk::ServerSpecializeArgs;
 using zygisk::Api;
+using zygisk::AppSpecializeArgs;
+using zygisk::ServerSpecializeArgs;
 
 static JNIEnv *g_env = nullptr;
 static JavaVM *g_vm = nullptr;
+static Api *g_api = nullptr;
 
 static bool jni_clear_exception(const char *ctx) {
     if (!g_env || !g_env->ExceptionCheck()) return false;
@@ -579,15 +581,17 @@ static void *socket_thread(void *) {
 class ClipSyncModule : public zygisk::ModuleBase {
 public:
     void onLoad(Api *api, JNIEnv *env) override {
-        (void)api;
+        g_api = api;
         g_env = env;
-        if (env->GetJavaVM(&g_vm) != JNI_OK) {
-            LOGE("GetJavaVM failed in onLoad");
+        if (env->GetJavaVM(&g_vm) != JNI_OK) g_vm = nullptr;
+        /* Keep onLoad quiet: it also runs in ordinary app child processes. */
+    }
+
+    void preAppSpecialize(AppSpecializeArgs *args) override {
+        (void)args;
+        if (g_api) {
+            g_api->setOption(zygisk::DLCLOSE_MODULE_LIBRARY);
         }
-        LOGD("onLoad called");
-        log_cmdline("onLoad");
-        /* onLoad runs in zygote. Do NOT try to detect system_server here.
-         * ActivityThread is not initialized and the process name is "zygote". */
     }
 
     void preServerSpecialize(ServerSpecializeArgs *args) override {

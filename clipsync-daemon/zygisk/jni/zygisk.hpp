@@ -355,29 +355,16 @@ struct api_table {
     uint32_t (*getFlags)(void * /* impl */);
 };
 
-static inline void zygisk_debug_log(const char *msg) {
-    int fd = open("/dev/kmsg", O_WRONLY | O_CLOEXEC);
-    if (fd >= 0) {
-        write(fd, msg, strlen(msg));
-        write(fd, "\n", 1);
-        close(fd);
-    }
-}
-
 template <class T>
 void entry_impl(api_table *table, JNIEnv *env) {
-    zygisk_debug_log("ClipSyncBridge: entry_impl called");
     static Api api;
     api.tbl = table;
     static T module;
     ModuleBase *m = &module;
     static module_abi abi(m);
-    zygisk_debug_log("ClipSyncBridge: about to registerModule");
     if (!table->registerModule(table, &abi)) {
-        zygisk_debug_log("ClipSyncBridge: registerModule returned false");
         return;
     }
-    zygisk_debug_log("ClipSyncBridge: registerModule succeeded, calling onLoad");
     m->onLoad(&api, env);
 }
 

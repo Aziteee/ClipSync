@@ -133,6 +133,10 @@ if ($zygiskMain -notmatch '"android"') {
     throw "Zygisk clipboard bridge must use a package name owned by UID 1000"
 }
 
+if ($zygiskMain -notmatch "preAppSpecialize" -or $zygiskMain -notmatch "DLCLOSE_MODULE_LIBRARY") {
+    throw "Zygisk bridge must request module dlclose in ordinary app processes"
+}
+
 if ($zygiskMain -notmatch "SO_PEERCRED" -or $zygiskMain -notmatch "cred\.uid != 0") {
     throw "Zygisk bridge must restrict @clipbridge clients by peer credentials"
 }
