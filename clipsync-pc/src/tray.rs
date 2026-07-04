@@ -28,8 +28,6 @@ pub enum DeviceSummaryState {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrayAction {
-    Reconnect,
-    TogglePause,
     ToggleStartWithWindows,
     CheckForUpdates,
     Quit,
@@ -42,7 +40,6 @@ pub struct Tray {
     device_items: Vec<MenuItem>,
     autostart_item: CheckMenuItem,
     conn_state: ConnState,
-    paused: bool,
     start_with_windows: bool,
 }
 
@@ -85,8 +82,6 @@ impl Tray {
         let menu = Menu::new();
         let devices_submenu = Submenu::new("Devices: 0 connected", true);
         let device_separator = PredefinedMenuItem::separator();
-        let reconnect_item = MenuItem::new("Reconnect", true, None);
-        let pause_item = MenuItem::new("Pause Sync", true, None);
         let autostart_item =
             CheckMenuItem::new("Start with Windows", true, start_with_windows, None);
         let separator = PredefinedMenuItem::separator();
@@ -95,8 +90,6 @@ impl Tray {
 
         menu.append(&devices_submenu)?;
         menu.append(&device_separator)?;
-        menu.append(&reconnect_item)?;
-        menu.append(&pause_item)?;
         menu.append(&autostart_item)?;
         menu.append(&separator)?;
         menu.append(&update_item)?;
@@ -109,19 +102,13 @@ impl Tray {
             .with_tooltip("ClipSync \u{b7} Not connected")
             .build()?;
 
-        let reconnect_id = reconnect_item.id().clone();
-        let pause_id = pause_item.id().clone();
         let autostart_id = autostart_item.id().clone();
         let update_id = update_item.id().clone();
         let quit_id = quit_item.id().clone();
 
         std::thread::spawn(move || loop {
             if let Ok(event) = MenuEvent::receiver().recv() {
-                let action = if event.id == reconnect_id {
-                    Some(TrayAction::Reconnect)
-                } else if event.id == pause_id {
-                    Some(TrayAction::TogglePause)
-                } else if event.id == autostart_id {
+                let action = if event.id == autostart_id {
                     Some(TrayAction::ToggleStartWithWindows)
                 } else if event.id == update_id {
                     Some(TrayAction::CheckForUpdates)
@@ -145,18 +132,12 @@ impl Tray {
             device_items: Vec::new(),
             autostart_item,
             conn_state: ConnState::Disconnected,
-            paused: false,
             start_with_windows,
         })
     }
 
     pub fn update_state(&mut self, state: ConnState) {
         self.conn_state = state;
-        self.refresh();
-    }
-
-    pub fn set_paused(&mut self, paused: bool) {
-        self.paused = paused;
         self.refresh();
     }
 
@@ -167,29 +148,21 @@ impl Tray {
 
     fn refresh(&mut self) {
         self.refresh_device_menu();
-        if self.paused {
-            let rgba = make_icon_data(255, 165, 0);
-            if let Ok(icon) = Icon::from_rgba(rgba, 32, 32) {
-                let _ = self.tray_icon.set_icon(Some(icon));
-            }
-            let _ = self.tray_icon.set_tooltip(Some("ClipSync \u{b7} Paused"));
-        } else {
-            let icon = icon_for_state(self.conn_state.clone());
-            let tooltip = match &self.conn_state {
-                ConnState::Connected { devices } => {
-                    let connected = connected_device_count(devices);
-                    if connected == 1 {
-                        "ClipSync \u{b7} 1 device connected".to_string()
-                    } else {
-                        format!("ClipSync \u{b7} {} devices connected", connected)
-                    }
+        let icon = icon_for_state(self.conn_state.clone());
+        let tooltip = match &self.conn_state {
+            ConnState::Connected { devices } => {
+                let connected = connected_device_count(devices);
+                if connected == 1 {
+                    "ClipSync \u{b7} 1 device connected".to_string()
+                } else {
+                    format!("ClipSync \u{b7} {} devices connected", connected)
                 }
-                ConnState::Connecting { .. } => "ClipSync \u{b7} Connecting\u{2026}".to_string(),
-                ConnState::Disconnected => "ClipSync \u{b7} Not connected".to_string(),
-            };
-            let _ = self.tray_icon.set_icon(Some(icon));
-            let _ = self.tray_icon.set_tooltip(Some(&tooltip));
-        }
+            }
+            ConnState::Connecting { .. } => "ClipSync \u{b7} Connecting\u{2026}".to_string(),
+            ConnState::Disconnected => "ClipSync \u{b7} Not connected".to_string(),
+        };
+        let _ = self.tray_icon.set_icon(Some(icon));
+        let _ = self.tray_icon.set_tooltip(Some(&tooltip));
     }
 
     fn refresh_device_menu(&mut self) {

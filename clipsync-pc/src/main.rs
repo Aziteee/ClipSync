@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::future::pending;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use sync::SyncEngine;
@@ -60,7 +60,6 @@ enum DeviceConnectionState {
 #[derive(Debug)]
 enum DeviceCommand {
     SendClipboard { text: String, event_id: String },
-    Reconnect,
 }
 
 #[derive(Debug)]
@@ -103,8 +102,6 @@ fn heartbeat_is_stale(idle_for: Duration, timeout: Duration) -> bool {
 struct App {
     tray: Option<Tray>,
     proxy: EventLoopProxy<UiEvent>,
-    action_tx: mpsc::UnboundedSender<TrayAction>,
-    paused: Arc<AtomicBool>,
     config: config::ClipSyncConfig,
     config_path: std::path::PathBuf,
     tokio_handle: tokio::runtime::Handle,
@@ -113,8 +110,6 @@ struct App {
 impl App {
     fn new(
         proxy: EventLoopProxy<UiEvent>,
-        action_tx: mpsc::UnboundedSender<TrayAction>,
-        paused: Arc<AtomicBool>,
         config: config::ClipSyncConfig,
         config_path: std::path::PathBuf,
         tokio_handle: tokio::runtime::Handle,
@@ -122,8 +117,6 @@ impl App {
         Self {
             tray: None,
             proxy,
-            action_tx,
-            paused,
             config,
             config_path,
             tokio_handle,
@@ -174,14 +167,6 @@ impl App {
             event_loop.exit();
             return;
         }
-        if matches!(action, TrayAction::TogglePause) {
-            let was_paused = self.paused.fetch_xor(true, Ordering::SeqCst);
-            let now_paused = !was_paused;
-            if let Some(ref mut tray) = self.tray {
-                tray.set_paused(now_paused);
-            }
-            return;
-        }
         if matches!(action, TrayAction::ToggleStartWithWindows) {
             self.config.general.start_with_windows = !self.config.general.start_with_windows;
             let enabled = self.config.general.start_with_windows;
@@ -213,7 +198,6 @@ impl App {
             });
             return;
         }
-        let _ = self.action_tx.send(action);
     }
 }
 
@@ -228,10 +212,6 @@ fn send_state(proxy: &EventLoopProxy<UiEvent>, state: ConnState) {
 
 fn preserve_text_after_send_failure(engine: &mut SyncEngine, device_id: &str, text: String) {
     engine.store_pending_for(device_id, text);
-}
-
-fn reconnect_interrupts_wait(action: TrayAction) -> bool {
-    matches!(action, TrayAction::Reconnect)
 }
 
 fn handshake_timeout(cfg: &config::ClipSyncConfig) -> Duration {
@@ -559,10 +539,6 @@ async fn run_device_task(
                 _ = &mut retry_sleep => break,
                 command = command_rx.recv() => {
                     match command {
-                        Some(DeviceCommand::Reconnect) => {
-                            backoff_secs = 1;
-                            break;
-                        }
                         Some(DeviceCommand::SendClipboard { text, event_id }) => {
                             let _ = event_tx.send(DeviceEvent::SendFailed {
                                 id: target.id.clone(),
@@ -616,9 +592,6 @@ async fn run_connected_device_loop(
                             target.name,
                             text.chars().count()
                         );
-                    }
-                    Some(DeviceCommand::Reconnect) => {
-                        return Some("reconnect requested".to_string());
                     }
                     None => return Some("device command channel closed".to_string()),
                 }
@@ -685,19 +658,13 @@ fn resolve_config_path() -> PathBuf {
     config_path_for(exe_path.as_deref(), cwd.as_deref())
 }
 
-async fn run_sync_loop(
-    cfg: Arc<config::ClipSyncConfig>,
-    proxy: EventLoopProxy<UiEvent>,
-    mut action_rx: mpsc::UnboundedReceiver<TrayAction>,
-    paused: Arc<AtomicBool>,
-) {
+async fn run_sync_loop(cfg: Arc<config::ClipSyncConfig>, proxy: EventLoopProxy<UiEvent>) {
     let (clip_tx, mut clip_rx) = mpsc::unbounded_channel::<String>();
     let listener = clip::ClipListener::new(clip_tx);
     listener.spawn();
 
     let mut engine = SyncEngine::new();
     let debounce = Duration::from_millis(cfg.clipboard.debounce_ms);
-    let mut actions_closed = false;
     let (device_event_tx, mut device_event_rx) = mpsc::unbounded_channel::<DeviceEvent>();
     let mut handles: HashMap<DeviceId, DeviceHandle> = HashMap::new();
     let mut latest_text: Option<String> = None;
@@ -767,17 +734,15 @@ async fn run_sync_loop(
                 }
             }
             Some(text) = clip_rx.recv() => {
-                if !paused.load(Ordering::Relaxed) {
-                    log::info!("Queued PC clipboard for debounce: {} chars", text.chars().count());
-                    debounce_text = Some(text);
-                    debounce_sleep.as_mut().reset(Instant::now() + debounce);
-                }
+                log::info!("Queued PC clipboard for debounce: {} chars", text.chars().count());
+                debounce_text = Some(text);
+                debounce_sleep.as_mut().reset(Instant::now() + debounce);
             }
             _ = &mut debounce_sleep, if debounce_text.is_some() => {
                 let Some(text) = debounce_text.take() else {
                     continue;
                 };
-                if !paused.load(Ordering::Relaxed) && engine.should_broadcast(&text) {
+                if engine.should_broadcast(&text) {
                     let event_id = next_event_id();
                     latest_text = Some(text.clone());
                     broadcast_clipboard(&handles, &mut engine, text.clone(), event_id, None);
@@ -811,28 +776,26 @@ async fn run_sync_loop(
                         send_aggregate_state(&proxy, &handles);
                     }
                     DeviceEvent::Push { id, text } => {
-                        if !paused.load(Ordering::Relaxed) {
-                            let ok = clip::write(&text);
-                            let name = handles
-                                .get(&id)
-                                .map(|handle| handle.target.name.as_str())
-                                .unwrap_or("unknown device");
-                            log::info!(
-                                "Received clipboard_push from {}: {} chars; PC clipboard write={}",
-                                name,
-                                text.chars().count(),
-                                ok
+                        let ok = clip::write(&text);
+                        let name = handles
+                            .get(&id)
+                            .map(|handle| handle.target.name.as_str())
+                            .unwrap_or("unknown device");
+                        log::info!(
+                            "Received clipboard_push from {}: {} chars; PC clipboard write={}",
+                            name,
+                            text.chars().count(),
+                            ok
+                        );
+                        if ok {
+                            relay_device_clipboard_push(
+                                &handles,
+                                &mut engine,
+                                &id,
+                                text.clone(),
+                                ok,
                             );
-                            if ok {
-                                relay_device_clipboard_push(
-                                    &handles,
-                                    &mut engine,
-                                    &id,
-                                    text.clone(),
-                                    ok,
-                                );
-                                latest_text = Some(text);
-                            }
+                            latest_text = Some(text);
                         }
                     }
                     DeviceEvent::SendFailed { id, text, event_id, error } => {
@@ -851,21 +814,6 @@ async fn run_sync_loop(
                             send_aggregate_state(&proxy, &handles);
                         }
                     }
-                }
-            }
-            action = action_rx.recv(), if !actions_closed => {
-                match action {
-                    Some(action) if reconnect_interrupts_wait(action) => {
-                        log::info!("Reconnect requested; reconnecting all devices");
-                        for handle in handles.values() {
-                            let _ = handle.tx.send(DeviceCommand::Reconnect);
-                        }
-                        if auto_discovery {
-                            discovery_rx = start_discovery(cfg.connection.port);
-                        }
-                    }
-                    Some(_) => {}
-                    None => actions_closed = true,
                 }
             }
         }
@@ -894,33 +842,16 @@ fn main() -> anyhow::Result<()> {
     let event_loop = EventLoop::<UiEvent>::with_user_event().build()?;
     let proxy = event_loop.create_proxy();
 
-    let (action_tx, action_rx) = mpsc::unbounded_channel::<TrayAction>();
-
-    let paused = Arc::new(AtomicBool::new(false));
-
     let rt = tokio::runtime::Runtime::new().unwrap();
     let tokio_handle = rt.handle().clone();
 
     let cfg_clone = cfg.clone();
     let proxy_clone = proxy.clone();
-    let paused_clone = paused.clone();
     std::thread::spawn(move || {
-        rt.block_on(run_sync_loop(
-            cfg_clone,
-            proxy_clone,
-            action_rx,
-            paused_clone,
-        ));
+        rt.block_on(run_sync_loop(cfg_clone, proxy_clone));
     });
 
-    let mut app = App::new(
-        proxy,
-        action_tx,
-        paused,
-        app_config,
-        config_path,
-        tokio_handle,
-    );
+    let mut app = App::new(proxy, app_config, config_path, tokio_handle);
     event_loop.set_control_flow(tray_event_loop_control_flow());
     event_loop.run_app(&mut app)?;
 
@@ -967,12 +898,6 @@ mod tests {
             Duration::from_millis(15_000),
             Duration::from_millis(15_000)
         ));
-    }
-
-    #[test]
-    fn reconnect_action_interrupts_waits() {
-        assert!(reconnect_interrupts_wait(TrayAction::Reconnect));
-        assert!(!reconnect_interrupts_wait(TrayAction::TogglePause));
     }
 
     #[test]
