@@ -428,8 +428,12 @@ fn broadcast_clipboard(
     engine: &mut SyncEngine,
     text: String,
     event_id: String,
+    exclude_device_id: Option<&str>,
 ) {
     for (id, handle) in handles {
+        if exclude_device_id == Some(id.as_str()) {
+            continue;
+        }
         if !handle.target.enabled {
             continue;
         }
@@ -460,6 +464,22 @@ fn flush_pending_to_device(engine: &mut SyncEngine, handle: &DeviceHandle) {
             engine.store_pending_for(handle.target.id.clone(), text);
         }
     }
+}
+
+fn relay_device_clipboard_push(
+    handles: &HashMap<DeviceId, DeviceHandle>,
+    engine: &mut SyncEngine,
+    source_id: &str,
+    text: String,
+    pc_write_ok: bool,
+) {
+    if !pc_write_ok {
+        return;
+    }
+
+    engine.mark_broadcast(&text);
+    let event_id = next_event_id();
+    broadcast_clipboard(handles, engine, text, event_id, Some(source_id));
 }
 
 async fn run_device_task(
@@ -754,7 +774,7 @@ async fn run_sync_loop(
                 if !paused.load(Ordering::Relaxed) && engine.should_broadcast(&text) {
                     let event_id = next_event_id();
                     latest_text = Some(text.clone());
-                    broadcast_clipboard(&handles, &mut engine, text.clone(), event_id);
+                    broadcast_clipboard(&handles, &mut engine, text.clone(), event_id, None);
                     engine.mark_broadcast(&text);
                     log::info!("Broadcast PC clipboard: {} chars to {} devices", text.chars().count(), handles.len());
                 }
@@ -798,7 +818,13 @@ async fn run_sync_loop(
                                 ok
                             );
                             if ok {
-                                engine.mark_broadcast(&text);
+                                relay_device_clipboard_push(
+                                    &handles,
+                                    &mut engine,
+                                    &id,
+                                    text.clone(),
+                                    ok,
+                                );
                                 latest_text = Some(text);
                             }
                         }
@@ -890,6 +916,28 @@ fn tray_event_loop_control_flow() -> ControlFlow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn connected_test_handle(
+        uri: &str,
+    ) -> (
+        DeviceId,
+        DeviceHandle,
+        mpsc::UnboundedReceiver<DeviceCommand>,
+    ) {
+        let target = target_from_uri(uri.to_string(), None, DeviceOrigin::Static);
+        let id = target.id.clone();
+        let (tx, rx) = mpsc::unbounded_channel();
+        (
+            id,
+            DeviceHandle {
+                target,
+                tx,
+                state: DeviceConnectionState::Connected,
+                last_error: None,
+            },
+            rx,
+        )
+    }
 
     #[test]
     fn heartbeat_times_out_after_idle_deadline() {
@@ -1030,7 +1078,7 @@ enabled = false
         );
         let mut engine = SyncEngine::new();
 
-        broadcast_clipboard(&handles, &mut engine, "hello".into(), "evt-1".into());
+        broadcast_clipboard(&handles, &mut engine, "hello".into(), "evt-1".into(), None);
 
         assert!(matches!(
             connected_rx.try_recv(),
@@ -1041,6 +1089,50 @@ enabled = false
             engine.take_pending_for(&disconnected_id),
             Some("hello".into())
         );
+    }
+
+    #[test]
+    fn device_push_relays_to_other_connected_devices_only() {
+        let (source_id, source_handle, mut source_rx) =
+            connected_test_handle("ws://192.168.0.10:5287/ws");
+        let (peer_id, peer_handle, mut peer_rx) =
+            connected_test_handle("ws://192.168.0.11:5287/ws");
+        let mut handles = HashMap::new();
+        handles.insert(source_id.clone(), source_handle);
+        handles.insert(peer_id, peer_handle);
+        let mut engine = SyncEngine::new();
+
+        relay_device_clipboard_push(&handles, &mut engine, &source_id, "from phone".into(), true);
+
+        assert!(source_rx.try_recv().is_err());
+        assert!(matches!(
+            peer_rx.try_recv(),
+            Ok(DeviceCommand::SendClipboard { text, .. }) if text == "from phone"
+        ));
+        assert!(!engine.should_broadcast("from phone"));
+    }
+
+    #[test]
+    fn failed_pc_write_from_device_push_does_not_relay() {
+        let (source_id, source_handle, _source_rx) =
+            connected_test_handle("ws://192.168.0.10:5287/ws");
+        let (peer_id, peer_handle, mut peer_rx) =
+            connected_test_handle("ws://192.168.0.11:5287/ws");
+        let mut handles = HashMap::new();
+        handles.insert(source_id.clone(), source_handle);
+        handles.insert(peer_id, peer_handle);
+        let mut engine = SyncEngine::new();
+
+        relay_device_clipboard_push(
+            &handles,
+            &mut engine,
+            &source_id,
+            "from phone".into(),
+            false,
+        );
+
+        assert!(peer_rx.try_recv().is_err());
+        assert!(engine.should_broadcast("from phone"));
     }
 
     #[test]
