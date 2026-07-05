@@ -46,7 +46,7 @@
  * sun_path[0] == '\0', actual name follows. */
 #define SOCK_ABSTRACT_NAME "clipbridge"
 static constexpr const char *kClipboardCallerPackage = "android";
-static constexpr const char *kHelperJarPath = "/system/etc/clipsync-helper.jar";
+
 static constexpr const char *kHelperBinaryClassName = "dev.clipsync.bridge.ClipSyncBridgeHelper";
 
 using zygisk::Api;
@@ -59,6 +59,9 @@ static Api *g_api = nullptr;
 static pthread_mutex_t g_watchers_mutex = PTHREAD_MUTEX_INITIALIZER;
 static std::vector<int> g_watchers;
 static jobject g_clip_listener = nullptr;
+
+static std::vector<uint8_t> g_moduleDex;
+static constexpr const char *kModuleDexPath = "/data/adb/modules/clipsyncd/zygisk/clipsync-helper.jar";
 
 #if CLIPSYNC_BRIDGE_FILE_LOG
 static void file_log(const char *fmt, ...) {
@@ -174,6 +177,41 @@ static void notify_watchers(void) {
     }
     pthread_mutex_unlock(&g_watchers_mutex);
 }
+
+#include <fcntl.h>
+
+static void companion_handler(int fd) {
+    int dex_fd = open(kModuleDexPath, O_RDONLY);
+    if (dex_fd < 0) {
+        uint32_t size = 0;
+        write(fd, &size, sizeof(size));
+        return;
+    }
+
+    off_t end = lseek(dex_fd, 0, SEEK_END);
+    lseek(dex_fd, 0, SEEK_SET);
+    if (end <= 0 || (uint64_t)end > UINT32_MAX) {
+        uint32_t size = 0;
+        write(fd, &size, sizeof(size));
+        close(dex_fd);
+        return;
+    }
+
+    uint32_t size = (uint32_t)end;
+    write(fd, &size, sizeof(size));
+
+    char buf[4096];
+    uint32_t remain = size;
+    while (remain > 0) {
+        size_t chunk = remain < sizeof(buf) ? (size_t)remain : sizeof(buf);
+        ssize_t n = read(dex_fd, buf, chunk);
+        if (n <= 0) break;
+        write(fd, buf, (size_t)n);
+        remain -= (uint32_t)n;
+    }
+    close(dex_fd);
+}
+REGISTER_ZYGISK_COMPANION(companion_handler)
 
 extern "C" JNIEXPORT void JNICALL
 Java_dev_clipsync_bridge_ClipSyncBridgeHelper_nativeOnClipboardChanged(JNIEnv *, jclass) {
@@ -895,6 +933,31 @@ public:
 
     void preServerSpecialize(ServerSpecializeArgs *args) override {
         (void)args;
+        if (!g_api) return;
+
+        int fd = g_api->connectCompanion();
+        if (fd < 0) {
+            LOGE("connectCompanion failed, DEX loading unavailable");
+            return;
+        }
+
+        uint32_t size = 0;
+        if (bridge_read_full(fd, &size, sizeof(size)) != 0 || size == 0) {
+            LOGE("companion: invalid DEX size %u", size);
+            close(fd);
+            return;
+        }
+
+        g_moduleDex.resize(size);
+        if (bridge_read_full(fd, g_moduleDex.data(), size) != 0) {
+            LOGE("companion: failed to read DEX bytes");
+            g_moduleDex.clear();
+            close(fd);
+            return;
+        }
+
+        close(fd);
+        LOGD("companion: received %u bytes DEX", size);
     }
 
     void postServerSpecialize(const ServerSpecializeArgs *args) override {
