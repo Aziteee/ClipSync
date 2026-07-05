@@ -226,12 +226,13 @@ if ($zygiskMain -notmatch "addPrimaryClipChangedListener" -or $zygiskMain -notma
     throw "Zygisk bridge must register an IOnPrimaryClipChangedListener"
 }
 
-if ($zygiskMain -notmatch "/system/etc/clipsync-helper\.jar") {
-    throw "Zygisk bridge must load the helper jar from the systemless /system/etc mount"
+if ($zygiskMain -notmatch "InMemoryDexClassLoader") {
+    throw "Zygisk bridge must load the helper DEX via InMemoryDexClassLoader from companion process"
 }
 
-if ($zygiskMain -notmatch "PathClassLoader" -or $zygiskMain -match "DexClassLoader") {
-    throw "Zygisk bridge must load the mounted helper jar with PathClassLoader"
+if ($zygiskMain -notmatch "REGISTER_ZYGISK_COMPANION") {
+    throw "Zygisk bridge must register a companion handler for DEX transfer"
+}
 }
 
 if ($zygiskMain -match "/data/system/clipsync-helper\.jar") {
