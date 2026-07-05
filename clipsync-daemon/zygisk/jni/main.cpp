@@ -64,12 +64,14 @@ static bool jni_clear_exception(const char *ctx) {
         jmethodID toString = exClass ? g_env->GetMethodID(exClass, "toString", "()Ljava/lang/String;") : nullptr;
         jstring msg = toString ? (jstring)g_env->CallObjectMethod(ex, toString) : nullptr;
         const char *chars = msg ? g_env->GetStringUTFChars(msg, nullptr) : nullptr;
+        LOGE("%s: %s", ctx, chars ? chars : "(no detail)");
         if (msg && chars) g_env->ReleaseStringUTFChars(msg, chars);
         if (msg) g_env->DeleteLocalRef(msg);
         if (exClass) g_env->DeleteLocalRef(exClass);
         g_env->DeleteLocalRef(ex);
+    } else {
+        LOGE("%s: JNI exception (no detail)", ctx);
     }
-    LOGE("%s: JNI exception", ctx);
     return true;
 }
 

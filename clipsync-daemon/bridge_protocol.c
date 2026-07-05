@@ -37,7 +37,6 @@ int bridge_read_full(int fd, void *buf, size_t len) {
             if (errno == EINTR) continue;
             return -1;
         }
-        if (n == 0) return -1;
         done += (size_t)n;
     }
     return 0;
