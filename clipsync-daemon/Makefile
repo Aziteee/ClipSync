@@ -49,7 +49,7 @@ $(HELPER_JAR): $(HELPER_SRC) $(HELPER_STUB)
 	@if not exist module\zygisk mkdir module\zygisk
 	javac -source 8 -target 8 -bootclasspath "$(ANDROID_JAR)" -d $(BUILD_DIR)\helper\classes $(HELPER_STUB) $(HELPER_SRC)
 	@powershell -NoProfile -ExecutionPolicy Bypass -Command "$$classes = Get-ChildItem -Path '$(BUILD_DIR)\helper\classes\dev\clipsync\bridge' -Filter '*.class' | ForEach-Object { $$_.FullName }; & '$(D8)' --lib '$(ANDROID_JAR)' --classpath '$(BUILD_DIR)\helper\classes' --output '$(BUILD_DIR)\helper\dex' $$classes"
-	@powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path '$(BUILD_DIR)\helper\dex\classes.dex' -DestinationPath '$(HELPER_JAR)' -Force"
+	@powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path '$(BUILD_DIR)\helper\dex\classes.dex' -DestinationPath '$(BUILD_DIR)\helper\clipsync-helper.zip' -Force; Copy-Item -Path '$(BUILD_DIR)\helper\clipsync-helper.zip' -Destination '$(HELPER_JAR)' -Force"
 
 clean:
 	@powershell -NoProfile -ExecutionPolicy Bypass -Command "Remove-Item -LiteralPath '$(BUILD_DIR)','$(DIST_DIR)','$(ZYGISK_SO)','$(HELPER_JAR)' -Recurse -Force -ErrorAction SilentlyContinue"
