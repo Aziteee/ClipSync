@@ -4,16 +4,42 @@
 #include <signal.h>
 #include <unistd.h>
 #include <time.h>
+#include <stdint.h>
 #include "protocol.h"
 #include "clip_bridge_client.h"
 #include "ws_server.h"
 #include "mdns_publish.h"
 #include "protocol_json.h"
 #include "daemon_config.h"
+#include "last_clip.h"
 
-static volatile int running = 1;
-static char g_last_text[65536] = {0};
+#define MAX_IDLE_POLL_MS 5000
+#define MDNS_ANNOUNCE_INTERVAL_MS 30000LL
+
+static volatile sig_atomic_t running = 1;
+static clipsync_last_clip g_last_clip;
 static int g_bridge_healthy = 0;
+
+static long long monotonic_millis(void) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return (long long)time(NULL) * 1000LL;
+    }
+    return (long long)ts.tv_sec * 1000LL + (long long)(ts.tv_nsec / 1000000LL);
+}
+
+static int min_timeout_until(long long deadline_ms, long long now_ms, int current_timeout_ms) {
+    long long remaining;
+    if (deadline_ms <= 0) return current_timeout_ms;
+    if (now_ms >= deadline_ms) return 0;
+    remaining = deadline_ms - now_ms;
+    return remaining < current_timeout_ms ? (int)remaining : current_timeout_ms;
+}
+
+static void wake_main_loop(void *arg) {
+    (void)arg;
+    ws_server_wakeup();
+}
 
 static void update_module_status(clipsync_daemon_config *cfg) {
     const char *run_state;
@@ -45,10 +71,13 @@ static void update_module_status(clipsync_daemon_config *cfg) {
 }
 
 static void on_clip_change(const char *text) {
+    size_t len;
     if (!text) return;
-    /* Dedup */
-    if (strcmp(text, g_last_text) == 0) return;
-    strncpy(g_last_text, text, sizeof(g_last_text) - 1);
+    len = strlen(text);
+    if (clipsync_last_clip_same(&g_last_clip, text, len)) return;
+    if (clipsync_last_clip_update(&g_last_clip, text, len) != 0) {
+        fprintf(stderr, "[clipsyncd] failed to update clipboard dedupe state\n");
+    }
 
     unsigned long long ts = (unsigned long long)time(NULL) * 1000ULL;
     char *json = protocol_json_build_clipboard_push(text, ts);
@@ -60,9 +89,13 @@ static void on_clip_change(const char *text) {
 }
 
 static void on_ws_set(const char *text) {
+    size_t len;
     if (!text) return;
-    printf("[clipsyncd] received set: %lu chars\n", (unsigned long)strlen(text));
-    strncpy(g_last_text, text, sizeof(g_last_text) - 1);
+    len = strlen(text);
+    printf("[clipsyncd] received set: %lu chars\n", (unsigned long)len);
+    if (clipsync_last_clip_update(&g_last_clip, text, len) != 0) {
+        fprintf(stderr, "[clipsyncd] failed to update clipboard dedupe state\n");
+    }
     if (clip_bridge_set_text(text) != 0) {
         fprintf(stderr, "[clipsyncd] failed to write Android clipboard\n");
     }
@@ -83,6 +116,10 @@ static void sig_handler(int sig) {
 
 int main(int argc, char *argv[]) {
     clipsync_daemon_config cfg;
+    long long next_mdns_announce_ms;
+    int last_pc_connected = -1;
+
+    clipsync_last_clip_init(&g_last_clip);
     clipsync_config_init(&cfg);
     if (clipsync_config_load_from_args(&cfg, argc, argv) != 0) {
         return 1;
@@ -116,7 +153,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     g_bridge_healthy = 1;
-    if (clip_bridge_watch_start() != 0) {
+    if (clip_bridge_watch_start(wake_main_loop, NULL) != 0) {
         fprintf(stderr, "[clipsyncd] clipboard WATCH failed to start\n");
         return 1;
     }
@@ -130,32 +167,53 @@ int main(int argc, char *argv[]) {
 
     printf("[clipsyncd] running. Waiting for connections and clipboard events...\n");
     update_module_status(&cfg);
+    last_pc_connected = ws_server_authenticated_count() > 0 ? 1 : 0;
+    next_mdns_announce_ms = monotonic_millis() + MDNS_ANNOUNCE_INTERVAL_MS;
 
     /* Event loop */
-    int status_update_ticks = 0;
-    int mdns_announce_ticks = 0;
     while (running) {
         size_t authenticated_count;
-        ws_server_poll(50);
-        authenticated_count = ws_server_authenticated_count();
-        if (++status_update_ticks >= 100) {
-            status_update_ticks = 0;
-            update_module_status(&cfg);
-        }
-        if (authenticated_count == 0 && ++mdns_announce_ticks >= 600) {
-            mdns_announce_ticks = 0;
-            mdns_publish_announce();
-        } else if (authenticated_count > 0) {
-            mdns_announce_ticks = 0;
-        }
+        int pc_connected;
+        int timeout_ms;
+        long long now_ms;
 
         if (clip_bridge_watch_take_changed()) {
             handle_clipboard_event();
+        }
+
+        now_ms = monotonic_millis();
+        timeout_ms = ws_server_next_timeout_ms(MAX_IDLE_POLL_MS);
+        if (last_pc_connected == 0) {
+            timeout_ms = min_timeout_until(next_mdns_announce_ms, now_ms, timeout_ms);
+        }
+
+        ws_server_poll(timeout_ms);
+
+        if (clip_bridge_watch_take_changed()) {
+            handle_clipboard_event();
+        }
+
+        authenticated_count = ws_server_authenticated_count();
+        pc_connected = authenticated_count > 0 ? 1 : 0;
+        if (pc_connected != last_pc_connected) {
+            last_pc_connected = pc_connected;
+            update_module_status(&cfg);
+            if (!pc_connected) {
+                mdns_publish_announce();
+                next_mdns_announce_ms = monotonic_millis() + MDNS_ANNOUNCE_INTERVAL_MS;
+            }
+        }
+
+        now_ms = monotonic_millis();
+        if (!pc_connected && now_ms >= next_mdns_announce_ms) {
+            mdns_publish_announce();
+            next_mdns_announce_ms = now_ms + MDNS_ANNOUNCE_INTERVAL_MS;
         }
     }
 
     printf("[clipsyncd] shutting down.\n");
     clip_bridge_watch_stop();
     update_module_status(NULL);
+    clipsync_last_clip_free(&g_last_clip);
     return 0;
 }

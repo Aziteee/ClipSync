@@ -11,6 +11,8 @@ $zygiskMain = Get-Content -Raw (Join-Path $root "zygisk/jni/main.cpp")
 $bridgeProtocol = Get-Content -Raw (Join-Path $root "bridge_protocol.c")
 $clipBridgeClient = Get-Content -Raw (Join-Path $root "clip_bridge_client.c")
 $wsServer = Get-Content -Raw (Join-Path $root "ws_server.c")
+$lastClip = Get-Content -Raw (Join-Path $root "last_clip.c")
+$lastClipTest = Get-Content -Raw (Join-Path $root "test_last_clip.c")
 $mdnsPublish = Get-Content -Raw (Join-Path $root "mdns_publish.c")
 $legacyClipPrefix = "binder" + "_clip"
 $legacyClipSourcePattern = $legacyClipPrefix + "\.c"
@@ -62,6 +64,10 @@ if ($makefile -notmatch "clip_bridge_client\.c") {
 
 if ($makefile -notmatch "bridge_protocol\.c") {
     throw "daemon and zygisk builds must include the shared bridge protocol helper"
+}
+
+if ($makefile -notmatch "last_clip\.c" -or $makefile -notmatch "test_last_clip") {
+    throw "daemon build must include exact last-clipboard dedupe helper and tests"
 }
 
 if ($makefile -match "SRCS\s*=.*$legacyClipSourcePattern") {
@@ -120,6 +126,24 @@ if ($daemonMain -notmatch "clip_bridge_watch_start" -or $daemonMain -notmatch "c
     throw "clipsyncd must use event-driven clipbridge WATCH notifications"
 }
 
+if ($daemonMain -notmatch "clip_bridge_watch_start\s*\(\s*wake_main_loop" -or
+    $clipBridgeClient -notmatch "g_watch_notify_fn" -or
+    $clipBridgeClient -notmatch "g_watch_notify_fn\s*\(\s*g_watch_notify_arg\s*\)") {
+    throw "WATCH thread must wake the daemon event loop when clipboard changes arrive"
+}
+
+if ($daemonMain -match "ws_server_poll\s*\(\s*50\s*\)" -or
+    $daemonMain -match "status_update_ticks" -or
+    $daemonMain -match "mdns_announce_ticks") {
+    throw "clipsyncd must not use the old fixed 50ms tick loop"
+}
+
+if ($daemonMain -notmatch "MAX_IDLE_POLL_MS\s+5000" -or
+    $daemonMain -notmatch "CLOCK_MONOTONIC" -or
+    $daemonMain -notmatch "ws_server_next_timeout_ms") {
+    throw "clipsyncd must use dynamic long poll timeouts with monotonic mDNS deadlines"
+}
+
 if ($clipBridgeClient -notmatch "WATCH\\n" -or $clipBridgeClient -notmatch "CLIPSYNC_WATCH_LINE_CHANGED") {
     throw "clip_bridge_client must implement WATCH change notifications"
 }
@@ -142,6 +166,24 @@ if ($makefile -match "clipboard_poll\.c" -or $makefile -match "test_clipboard_po
 
 if ($wsServer -notmatch "AUTH_TIMEOUT_MS" -or $wsServer -notmatch "auth_deadline_ms") {
     throw "WebSocket server must close unauthenticated clients after an auth deadline"
+}
+
+if ($wsServer -notmatch "mg_wakeup_init" -or
+    $wsServer -notmatch "mg_wakeup" -or
+    $wsServer -notmatch "MG_EV_WAKEUP" -or
+    $wsServer -notmatch "ws_server_next_timeout_ms") {
+    throw "WebSocket server must support wakeup-driven long polling"
+}
+
+if ($daemonMain -match "g_last_text" -or $daemonMain -match "65536") {
+    throw "daemon must not use fixed 64KB clipboard dedupe storage"
+}
+
+if ($lastClip -notmatch "FNV1A64" -or
+    $lastClip -notmatch "memcmp" -or
+    $lastClipTest -notmatch "70000" -or
+    $lastClipTest -notmatch "hash collision") {
+    throw "last clipboard dedupe must use length/hash plus byte compare and cover large text"
 }
 
 if ($wsServer -notmatch "#define MAX_CLIENTS 1") {

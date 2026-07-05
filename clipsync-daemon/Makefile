@@ -9,7 +9,7 @@ CFLAGS = -Wall -Wextra -O2 -Ithird_party/mongoose -DMG_ENABLE_MDNS=1
 LDFLAGS = -ldl
 TEST_CLIP_LDFLAGS = -lbinder_ndk -ldl
 TARGET = $(BUILD_DIR)/clipsyncd
-SRCS = clipsyncd.c clip_bridge_client.c bridge_protocol.c ws_server.c mdns_publish.c protocol_json.c crypto_hmac.c daemon_config.c third_party/mongoose/mongoose.c
+SRCS = clipsyncd.c clip_bridge_client.c bridge_protocol.c ws_server.c mdns_publish.c protocol_json.c crypto_hmac.c daemon_config.c last_clip.c third_party/mongoose/mongoose.c
 OBJS = $(SRCS:%.c=$(BUILD_DIR)/%.o)
 NDK_BUILD ?= ndk-build
 ZYGISK_SO = module/zygisk/arm64-v8a.so
@@ -21,7 +21,7 @@ HELPER_JAR = module/system/etc/clipsync-helper.jar
 HELPER_SRC = zygisk/helper/src/dev/clipsync/bridge/ClipSyncBridgeHelper.java
 HELPER_STUB = zygisk/helper/stubs/android/content/IOnPrimaryClipChangedListener.java
 
-all: $(TARGET) $(BUILD_DIR)/test_clip $(BUILD_DIR)/test_bridge_client $(BUILD_DIR)/test_crypto_hmac $(BUILD_DIR)/test_protocol_json $(BUILD_DIR)/test_daemon_config $(BUILD_DIR)/test_bridge_protocol $(ZYGISK_SO) $(HELPER_JAR)
+all: $(TARGET) $(BUILD_DIR)/test_clip $(BUILD_DIR)/test_bridge_client $(BUILD_DIR)/test_crypto_hmac $(BUILD_DIR)/test_protocol_json $(BUILD_DIR)/test_daemon_config $(BUILD_DIR)/test_bridge_protocol $(BUILD_DIR)/test_last_clip $(ZYGISK_SO) $(HELPER_JAR)
 
 $(BUILD_DIR):
 	@if not exist $(BUILD_DIR) mkdir $(BUILD_DIR)
@@ -79,7 +79,7 @@ package: module
 	@echo KernelSU module package ready:
 	@echo   $(PACKAGE)
 
-.PHONY: all clean install module package test test-crypto test-json test-daemon-config test-bridge-protocol test-bridge-client
+.PHONY: all clean install module package test test-crypto test-json test-daemon-config test-bridge-protocol test-bridge-client test-last-clip
 
 test: $(BUILD_DIR)/test_clip
 	adb push $(BUILD_DIR)/test_clip /data/local/tmp/
@@ -115,6 +115,12 @@ $(BUILD_DIR)/test_bridge_protocol: test_bridge_protocol.c bridge_protocol.c brid
 test-bridge-protocol: $(BUILD_DIR)/test_bridge_protocol
 	adb push $(BUILD_DIR)/test_bridge_protocol /data/local/tmp/
 	adb shell su -c "chmod 755 /data/local/tmp/test_bridge_protocol && /data/local/tmp/test_bridge_protocol"
+
+$(BUILD_DIR)/test_last_clip: test_last_clip.c last_clip.c last_clip.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ test_last_clip.c last_clip.c
+
+test-last-clip: $(BUILD_DIR)/test_last_clip
+	$(BUILD_DIR)/test_last_clip
 
 $(BUILD_DIR)/test_daemon_config: test_daemon_config.c daemon_config.c daemon_config.h protocol.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ test_daemon_config.c daemon_config.c

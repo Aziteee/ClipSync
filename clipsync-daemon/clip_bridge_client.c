@@ -21,6 +21,8 @@ static atomic_int g_watch_running = 0;
 static atomic_int g_watch_changed = 0;
 static atomic_int g_watch_fd = -1;
 static pthread_t g_watch_thread;
+static void (*g_watch_notify_fn)(void *) = NULL;
+static void *g_watch_notify_arg = NULL;
 
 static int sock_connect(void) {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -149,6 +151,9 @@ static void *watch_thread_main(void *arg) {
             kind = bridge_parse_watch_line(line);
             if (kind == CLIPSYNC_WATCH_LINE_CHANGED) {
                 atomic_store(&g_watch_changed, 1);
+                if (g_watch_notify_fn) {
+                    g_watch_notify_fn(g_watch_notify_arg);
+                }
             } else if (kind != CLIPSYNC_WATCH_LINE_READY) {
                 fprintf(stderr, "[clip_bridge] WATCH unknown line: %s", line);
             }
@@ -163,14 +168,18 @@ static void *watch_thread_main(void *arg) {
     return NULL;
 }
 
-int clip_bridge_watch_start(void) {
+int clip_bridge_watch_start(void (*notify_fn)(void *), void *notify_arg) {
     int expected = 0;
     if (!atomic_compare_exchange_strong(&g_watch_running, &expected, 1)) {
         return 0;
     }
+    g_watch_notify_fn = notify_fn;
+    g_watch_notify_arg = notify_arg;
     atomic_store(&g_watch_changed, 0);
     if (pthread_create(&g_watch_thread, NULL, watch_thread_main, NULL) != 0) {
         atomic_store(&g_watch_running, 0);
+        g_watch_notify_fn = NULL;
+        g_watch_notify_arg = NULL;
         return -1;
     }
     return 0;
@@ -184,6 +193,8 @@ void clip_bridge_watch_stop(void) {
         shutdown(fd, SHUT_RDWR);
     }
     pthread_join(g_watch_thread, NULL);
+    g_watch_notify_fn = NULL;
+    g_watch_notify_arg = NULL;
 }
 
 int clip_bridge_watch_take_changed(void) {
