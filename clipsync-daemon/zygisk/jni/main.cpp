@@ -26,6 +26,9 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <fcntl.h>
+#include <vector>
+#include <cstdarg>
 
 #define TAG "ClipSyncBridge"
 
@@ -36,6 +39,8 @@
  * sun_path[0] == '\0', actual name follows. */
 #define SOCK_ABSTRACT_NAME "clipbridge"
 static constexpr const char *kClipboardCallerPackage = "android";
+static constexpr const char *kHelperJarPath = "/data/system/clipsync-helper.jar";
+static constexpr const char *kHelperBinaryClassName = "dev.clipsync.bridge.ClipSyncBridgeHelper";
 
 using zygisk::Api;
 using zygisk::AppSpecializeArgs;
@@ -44,11 +49,50 @@ using zygisk::ServerSpecializeArgs;
 static JNIEnv *g_env = nullptr;
 static JavaVM *g_vm = nullptr;
 static Api *g_api = nullptr;
+static pthread_mutex_t g_watchers_mutex = PTHREAD_MUTEX_INITIALIZER;
+static std::vector<int> g_watchers;
+static jobject g_clip_listener = nullptr;
+
+static void file_log(const char *fmt, ...) {
+    int fd = open("/data/system/clipsync_bridge.log", O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+    if (fd < 0) return;
+
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    if (n > 0) {
+        size_t len = (size_t)n < sizeof(buf) ? (size_t)n : sizeof(buf) - 1;
+        write(fd, buf, len);
+        write(fd, "\n", 1);
+    }
+    close(fd);
+}
 
 static bool jni_clear_exception(const char *ctx) {
     if (!g_env || !g_env->ExceptionCheck()) return false;
+    jthrowable ex = g_env->ExceptionOccurred();
+    g_env->ExceptionClear();
+    if (ex) {
+        jclass exClass = g_env->GetObjectClass(ex);
+        jmethodID toString = exClass ? g_env->GetMethodID(exClass, "toString", "()Ljava/lang/String;") : nullptr;
+        jstring msg = toString ? (jstring)g_env->CallObjectMethod(ex, toString) : nullptr;
+        const char *chars = msg ? g_env->GetStringUTFChars(msg, nullptr) : nullptr;
+        file_log("%s: JNI exception: %s", ctx, chars ? chars : "(toString unavailable)");
+        if (msg && chars) g_env->ReleaseStringUTFChars(msg, chars);
+        if (msg) g_env->DeleteLocalRef(msg);
+        if (exClass) g_env->DeleteLocalRef(exClass);
+        g_env->DeleteLocalRef(ex);
+    } else {
+        file_log("%s: JNI exception", ctx);
+    }
     LOGE("%s: JNI exception", ctx);
-    g_env->ExceptionDescribe();
+    return true;
+}
+
+static bool jni_drop_exception(void) {
+    if (!g_env || !g_env->ExceptionCheck()) return false;
     g_env->ExceptionClear();
     return true;
 }
@@ -96,6 +140,127 @@ static jfieldID get_field(jclass cls, const char *name, const char *sig) {
     return field;
 }
 
+static void add_watcher(int fd) {
+    pthread_mutex_lock(&g_watchers_mutex);
+    g_watchers.push_back(fd);
+    pthread_mutex_unlock(&g_watchers_mutex);
+}
+
+static void notify_watchers(void) {
+    pthread_mutex_lock(&g_watchers_mutex);
+    file_log("notify_watchers: count=%lu", (unsigned long)g_watchers.size());
+    for (auto it = g_watchers.begin(); it != g_watchers.end();) {
+        int fd = *it;
+        ssize_t n = send(fd, "CHANGED\n", 8, MSG_DONTWAIT | MSG_NOSIGNAL);
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+            ++it;
+        } else if (n < 0 || n != 8) {
+            close(fd);
+            it = g_watchers.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    pthread_mutex_unlock(&g_watchers_mutex);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_dev_clipsync_bridge_ClipSyncBridgeHelper_nativeOnClipboardChanged(JNIEnv *, jclass) {
+    file_log("nativeOnClipboardChanged");
+    notify_watchers();
+}
+
+static bool register_native_callback(jclass helperClass) {
+    if (!helperClass || !g_env) return false;
+    JNINativeMethod methods[] = {
+        {"nativeOnClipboardChanged", "()V", (void *)Java_dev_clipsync_bridge_ClipSyncBridgeHelper_nativeOnClipboardChanged},
+    };
+    if (g_env->RegisterNatives(helperClass, methods, sizeof(methods) / sizeof(methods[0])) != JNI_OK) {
+        jni_clear_exception("RegisterNatives ClipSyncBridgeHelper");
+        return false;
+    }
+    return true;
+}
+
+static jclass load_helper_class() {
+    if (!g_env) return nullptr;
+    file_log("load_helper_class: start path=%s", kHelperJarPath);
+    jclass loaderClass = find_class("dalvik/system/DexClassLoader");
+    if (!loaderClass) {
+        file_log("load_helper_class: DexClassLoader class missing");
+        return nullptr;
+    }
+
+    jmethodID ctor = g_env->GetMethodID(loaderClass, "<init>", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V");
+    if (!ctor || !jni_ok("DexClassLoader.<init>")) {
+        file_log("load_helper_class: DexClassLoader ctor missing");
+        g_env->DeleteLocalRef(loaderClass);
+        return nullptr;
+    }
+
+    jclass baseLoaderClass = find_class("java/lang/ClassLoader");
+    jmethodID getSystemClassLoader = baseLoaderClass
+        ? get_static_method(baseLoaderClass, "getSystemClassLoader", "()Ljava/lang/ClassLoader;")
+        : nullptr;
+    jobject parent = getSystemClassLoader
+        ? g_env->CallStaticObjectMethod(baseLoaderClass, getSystemClassLoader)
+        : nullptr;
+    if (baseLoaderClass && !jni_ok("ClassLoader.getSystemClassLoader")) {
+        parent = nullptr;
+    }
+    file_log("load_helper_class: parent=%s", parent ? "ok" : "null");
+
+    jclass classClass = find_class("java/lang/Class");
+    jmethodID forName = classClass
+        ? get_static_method(classClass, "forName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;")
+        : nullptr;
+    if (!forName) {
+        file_log("load_helper_class: Class.forName unavailable");
+        if (parent) g_env->DeleteLocalRef(parent);
+        if (baseLoaderClass) g_env->DeleteLocalRef(baseLoaderClass);
+        if (classClass) g_env->DeleteLocalRef(classClass);
+        g_env->DeleteLocalRef(loaderClass);
+        return nullptr;
+    }
+
+    jstring path = g_env->NewStringUTF(kHelperJarPath);
+    jstring optDir = g_env->NewStringUTF("/data/system");
+    jobject loader = (path && optDir) ? g_env->NewObject(loaderClass, ctor, path, optDir, nullptr, parent) : nullptr;
+    if (!loader || !jni_ok("DexClassLoader.new")) {
+        file_log("load_helper_class: DexClassLoader.new failed");
+        if (path) g_env->DeleteLocalRef(path);
+        if (optDir) g_env->DeleteLocalRef(optDir);
+        if (loader) g_env->DeleteLocalRef(loader);
+        if (parent) g_env->DeleteLocalRef(parent);
+        if (baseLoaderClass) g_env->DeleteLocalRef(baseLoaderClass);
+        g_env->DeleteLocalRef(classClass);
+        g_env->DeleteLocalRef(loaderClass);
+        return nullptr;
+    }
+
+    jstring name = g_env->NewStringUTF(kHelperBinaryClassName);
+    jclass helper = name
+        ? (jclass)g_env->CallStaticObjectMethod(classClass, forName, name, JNI_TRUE, loader)
+        : nullptr;
+    bool loaded = jni_ok("Class.forName ClipSyncBridgeHelper");
+    if (!helper || !loaded) {
+        file_log("load_helper_class: Class.forName failed helper=%p loaded=%d", helper, loaded ? 1 : 0);
+        helper = nullptr;
+    } else {
+        file_log("load_helper_class: helper loaded");
+    }
+
+    if (name) g_env->DeleteLocalRef(name);
+    g_env->DeleteLocalRef(loader);
+    if (parent) g_env->DeleteLocalRef(parent);
+    if (baseLoaderClass) g_env->DeleteLocalRef(baseLoaderClass);
+    g_env->DeleteLocalRef(path);
+    if (optDir) g_env->DeleteLocalRef(optDir);
+    g_env->DeleteLocalRef(classClass);
+    g_env->DeleteLocalRef(loaderClass);
+    return helper;
+}
+
 /* --- JNI: Call local ClipboardService --- */
 static jobject getClipboardService() {
     if (!g_env) return nullptr;
@@ -117,6 +282,120 @@ static jobject getClipboardService() {
     if (!jni_ok("IClipboard.Stub.asInterface")) cb = nullptr;
     g_env->DeleteLocalRef(binder); g_env->DeleteLocalRef(stub);
     return cb;
+}
+
+static bool register_clipboard_listener(void) {
+    if (g_clip_listener) return true;
+
+    jclass helper = load_helper_class();
+    if (!helper) {
+        LOGE("clipboard listener helper not loaded from %s", kHelperJarPath);
+        file_log("register_clipboard_listener: helper not loaded");
+        return false;
+    }
+    if (!register_native_callback(helper)) {
+        file_log("register_clipboard_listener: RegisterNatives failed");
+        g_env->DeleteLocalRef(helper);
+        return false;
+    }
+
+    jmethodID makeListener = get_static_method(helper, "makeListener", "()Landroid/content/IOnPrimaryClipChangedListener;");
+    if (!makeListener) {
+        file_log("register_clipboard_listener: makeListener missing");
+        g_env->DeleteLocalRef(helper);
+        return false;
+    }
+
+    jobject listener = g_env->CallStaticObjectMethod(helper, makeListener);
+    if (!jni_ok("ClipSyncBridgeHelper.makeListener")) listener = nullptr;
+    if (!listener) {
+        LOGE("clipboard listener creation failed");
+        file_log("register_clipboard_listener: listener creation failed");
+        g_env->DeleteLocalRef(helper);
+        return false;
+    }
+
+    jobject svc = getClipboardService();
+    if (!svc) {
+        g_env->DeleteLocalRef(listener);
+        g_env->DeleteLocalRef(helper);
+        LOGE("register listener: service null");
+        file_log("register_clipboard_listener: service null");
+        return false;
+    }
+    jclass iclip = g_env->GetObjectClass(svc);
+    if (!iclip || !jni_ok("GetObjectClass IClipboard listener")) {
+        if (iclip) g_env->DeleteLocalRef(iclip);
+        g_env->DeleteLocalRef(svc);
+        g_env->DeleteLocalRef(listener);
+        g_env->DeleteLocalRef(helper);
+        return false;
+    }
+
+    jstring pkg = g_env->NewStringUTF(kClipboardCallerPackage);
+    if (!pkg || !jni_ok("NewStringUTF listener package")) {
+        if (pkg) g_env->DeleteLocalRef(pkg);
+        g_env->DeleteLocalRef(iclip);
+        g_env->DeleteLocalRef(svc);
+        g_env->DeleteLocalRef(listener);
+        g_env->DeleteLocalRef(helper);
+        return false;
+    }
+
+    bool public_ok = false;
+    jmethodID add = g_env->GetMethodID(iclip, "addPrimaryClipChangedListener",
+        "(Landroid/content/IOnPrimaryClipChangedListener;Ljava/lang/String;Ljava/lang/String;II)V");
+    if (add) {
+        g_env->CallVoidMethod(svc, add, listener, pkg, nullptr, (jint)0, (jint)0);
+        public_ok = jni_ok("IClipboard.addPrimaryClipChangedListener modern");
+    } else {
+        jni_clear_exception("addPrimaryClipChangedListener modern lookup");
+    }
+
+    if (!public_ok) {
+        add = g_env->GetMethodID(iclip, "addPrimaryClipChangedListener",
+            "(Landroid/content/IOnPrimaryClipChangedListener;Ljava/lang/String;I)V");
+        if (add) {
+            g_env->CallVoidMethod(svc, add, listener, pkg, (jint)0);
+            public_ok = jni_ok("IClipboard.addPrimaryClipChangedListener legacy");
+        } else {
+            jni_clear_exception("addPrimaryClipChangedListener legacy lookup");
+        }
+    }
+
+    bool direct_ok = false;
+    jmethodID direct = get_static_method(helper, "registerDirect",
+        "(Ljava/lang/Object;Landroid/content/IOnPrimaryClipChangedListener;II)Z");
+    if (direct) {
+        direct_ok = g_env->CallStaticBooleanMethod(helper, direct, svc, listener, (jint)0, (jint)0) == JNI_TRUE;
+        if (!jni_ok("ClipSyncBridgeHelper.registerDirect")) {
+            direct_ok = false;
+        }
+    }
+
+    bool ok = direct_ok || public_ok;
+    if (ok) {
+        g_clip_listener = g_env->NewGlobalRef(listener);
+        if (!g_clip_listener || !jni_ok("NewGlobalRef clipboard listener")) {
+            ok = false;
+        }
+    }
+
+    g_env->DeleteLocalRef(pkg);
+    g_env->DeleteLocalRef(iclip);
+    g_env->DeleteLocalRef(svc);
+    g_env->DeleteLocalRef(listener);
+    g_env->DeleteLocalRef(helper);
+
+    if (ok) {
+        LOGD("clipboard listener registered");
+        file_log("register_clipboard_listener: registered public=%d direct=%d",
+                 public_ok ? 1 : 0, direct_ok ? 1 : 0);
+    } else {
+        LOGE("clipboard listener registration failed");
+        file_log("register_clipboard_listener: registration failed");
+    }
+    return ok;
 }
 
 static char *clipDataToText(jobject cd) {
@@ -249,7 +528,7 @@ static jobject readClipboardDirect(jobject impl) {
     jfieldID clipboardsField = g_env->GetFieldID(serviceClass, "mClipboards", "Landroid/util/SparseArray;");
     bool useSparseArray = (clipboardsField != nullptr);
     if (!useSparseArray) {
-        jni_clear_exception("mClipboards SparseArray probe");
+        jni_drop_exception();
         clipboardsField = g_env->GetFieldID(serviceClass, "mClipboards", "Landroid/util/SparseArrayMap;");
     }
     if (!clipboardsField) {
@@ -363,7 +642,7 @@ static char *readClipboard() {
         }
         if (pkg) g_env->DeleteLocalRef(pkg);
     }
-    if (!cd && !m) {
+    if (!cd) {
         cd = readClipboardDirect(svc);
     }
 
@@ -514,6 +793,27 @@ static void handle_client(int fd) {
         char *text = readClipboard();
         bridge_write_cstr(fd, text ? "HAS 1\n" : "HAS 0\n");
         if (text) free(text);
+    } else if (strcmp(line, "WATCH\n") == 0) {
+        int flags;
+        if (!g_clip_listener) {
+            register_clipboard_listener();
+        }
+        if (!g_clip_listener) {
+            write_err(fd, "watch_unavailable");
+            close(fd);
+            return;
+        }
+        if (bridge_write_cstr(fd, "READY\n") != 0) {
+            close(fd);
+            return;
+        }
+        flags = fcntl(fd, F_GETFL, 0);
+        if (flags >= 0) {
+            fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+        }
+        add_watcher(fd);
+        LOGD("WATCH ready fd=%d", fd);
+        return;
     } else {
         write_err(fd, "unknown_command");
     }
@@ -530,6 +830,9 @@ static void *socket_thread(void *) {
     }
     g_env = env;
     LOGD("socket_thread attached to JVM");
+    if (!register_clipboard_listener()) {
+        LOGE("clipboard listener unavailable; WATCH clients will be rejected");
+    }
 
     int fd = -1;
     struct sockaddr_un addr = {};

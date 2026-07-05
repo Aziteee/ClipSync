@@ -84,3 +84,10 @@ int bridge_parse_len_header(const char *line, const char *prefix, size_t *out_le
     *out_len = (size_t)parsed;
     return 0;
 }
+
+clipsync_watch_line bridge_parse_watch_line(const char *line) {
+    if (!line) return CLIPSYNC_WATCH_LINE_UNKNOWN;
+    if (strcmp(line, "READY\n") == 0) return CLIPSYNC_WATCH_LINE_READY;
+    if (strcmp(line, "CHANGED\n") == 0) return CLIPSYNC_WATCH_LINE_CHANGED;
+    return CLIPSYNC_WATCH_LINE_UNKNOWN;
+}

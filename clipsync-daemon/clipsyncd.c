@@ -9,7 +9,6 @@
 #include "ws_server.h"
 #include "mdns_publish.h"
 #include "protocol_json.h"
-#include "clipboard_poll.h"
 #include "daemon_config.h"
 
 static volatile int running = 1;
@@ -69,7 +68,7 @@ static void on_ws_set(const char *text) {
     }
 }
 
-static void poll_clipboard_change(void) {
+static void handle_clipboard_event(void) {
     char *text = clip_bridge_get_text();
     if (!text) return;
     g_bridge_healthy = 1;
@@ -92,12 +91,11 @@ int main(int argc, char *argv[]) {
     signal(SIGTERM, sig_handler);
     signal(SIGINT, sig_handler);
 
-    printf("[clipsyncd] config: path=%s loaded=%s port=%d secret=%s debounce_ms=%d\n",
+    printf("[clipsyncd] config: path=%s loaded=%s port=%d secret=%s\n",
            cfg.config_path,
            cfg.config_loaded ? "yes" : "no",
            cfg.port,
-           cfg.secret[0] ? "(set)" : "(empty)",
-           cfg.debounce_ms);
+           cfg.secret[0] ? "(set)" : "(empty)");
     printf("[clipsyncd] starting on port %d...\n", cfg.port);
 
     /* Initialize subsystems */
@@ -118,6 +116,10 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     g_bridge_healthy = 1;
+    if (clip_bridge_watch_start() != 0) {
+        fprintf(stderr, "[clipsyncd] clipboard WATCH failed to start\n");
+        return 1;
+    }
 
     /* Verify bridge: read current clipboard */
     {
@@ -130,7 +132,6 @@ int main(int argc, char *argv[]) {
     update_module_status(&cfg);
 
     /* Event loop */
-    int clipboard_poll_ticks = 0;
     int status_update_ticks = 0;
     int mdns_announce_ticks = 0;
     while (running) {
@@ -147,14 +148,14 @@ int main(int argc, char *argv[]) {
         } else if (authenticated_count > 0) {
             mdns_announce_ticks = 0;
         }
-        int poll_every_ticks = clipsync_clipboard_poll_ticks_for_clients(authenticated_count, cfg.debounce_ms);
-        if (++clipboard_poll_ticks >= poll_every_ticks) {
-            clipboard_poll_ticks = 0;
-            poll_clipboard_change();
+
+        if (clip_bridge_watch_take_changed()) {
+            handle_clipboard_event();
         }
     }
 
     printf("[clipsyncd] shutting down.\n");
+    clip_bridge_watch_stop();
     update_module_status(NULL);
     return 0;
 }

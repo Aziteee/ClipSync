@@ -4,5 +4,8 @@
 int  clip_bridge_init(void);
 char *clip_bridge_get_text(void);
 int  clip_bridge_set_text(const char *text);
+int  clip_bridge_watch_start(void);
+void clip_bridge_watch_stop(void);
+int  clip_bridge_watch_take_changed(void);
 
 #endif

@@ -1,10 +1,15 @@
 BUILD_DIR = build
 CC ?= aarch64-linux-android33-clang
+ANDROID_SDK_ROOT ?= D:\AppData\Android\sdk
+ANDROID_PLATFORM ?= android-36
+ANDROID_BUILD_TOOLS ?= 36.1.0
+D8 ?= $(ANDROID_SDK_ROOT)\build-tools\$(ANDROID_BUILD_TOOLS)\d8.bat
+ANDROID_JAR ?= $(ANDROID_SDK_ROOT)\platforms\$(ANDROID_PLATFORM)\android.jar
 CFLAGS = -Wall -Wextra -O2 -Ithird_party/mongoose -DMG_ENABLE_MDNS=1
 LDFLAGS = -ldl
 TEST_CLIP_LDFLAGS = -lbinder_ndk -ldl
 TARGET = $(BUILD_DIR)/clipsyncd
-SRCS = clipsyncd.c clip_bridge_client.c bridge_protocol.c ws_server.c mdns_publish.c protocol_json.c crypto_hmac.c clipboard_poll.c daemon_config.c third_party/mongoose/mongoose.c
+SRCS = clipsyncd.c clip_bridge_client.c bridge_protocol.c ws_server.c mdns_publish.c protocol_json.c crypto_hmac.c daemon_config.c third_party/mongoose/mongoose.c
 OBJS = $(SRCS:%.c=$(BUILD_DIR)/%.o)
 NDK_BUILD ?= ndk-build
 ZYGISK_SO = module/zygisk/arm64-v8a.so
@@ -12,8 +17,11 @@ ZYGISK_BUILD_SO = zygisk/libs/arm64-v8a/libzygisk_clipsync.so
 DIST_DIR = dist
 PACKAGE = $(DIST_DIR)/clipsyncd-module.zip
 CONFIG_SRC = config/clipsync.toml
+HELPER_JAR = module/clipsync-helper.jar
+HELPER_SRC = zygisk/helper/src/dev/clipsync/bridge/ClipSyncBridgeHelper.java
+HELPER_STUB = zygisk/helper/stubs/android/content/IOnPrimaryClipChangedListener.java
 
-all: $(TARGET) $(BUILD_DIR)/test_clip $(BUILD_DIR)/test_bridge_client $(BUILD_DIR)/test_crypto_hmac $(BUILD_DIR)/test_protocol_json $(BUILD_DIR)/test_clipboard_poll $(BUILD_DIR)/test_daemon_config $(BUILD_DIR)/test_bridge_protocol $(ZYGISK_SO)
+all: $(TARGET) $(BUILD_DIR)/test_clip $(BUILD_DIR)/test_bridge_client $(BUILD_DIR)/test_crypto_hmac $(BUILD_DIR)/test_protocol_json $(BUILD_DIR)/test_daemon_config $(BUILD_DIR)/test_bridge_protocol $(ZYGISK_SO) $(HELPER_JAR)
 
 $(BUILD_DIR):
 	@if not exist $(BUILD_DIR) mkdir $(BUILD_DIR)
@@ -36,15 +44,21 @@ $(ZYGISK_SO): zygisk/jni/main.cpp zygisk/jni/zygisk.hpp zygisk/jni/Android.mk zy
 	@if not exist module\zygisk mkdir module\zygisk
 	copy /Y zygisk\libs\arm64-v8a\libzygisk_clipsync.so $(ZYGISK_SO)
 
+$(HELPER_JAR): $(HELPER_SRC) $(HELPER_STUB)
+	@powershell -NoProfile -ExecutionPolicy Bypass -Command "Remove-Item -LiteralPath '$(BUILD_DIR)\helper','$(HELPER_JAR)' -Recurse -Force -ErrorAction SilentlyContinue; New-Item -ItemType Directory -Force -Path '$(BUILD_DIR)\helper\classes','$(BUILD_DIR)\helper\dex','module' | Out-Null"
+	javac -source 8 -target 8 -bootclasspath "$(ANDROID_JAR)" -d $(BUILD_DIR)\helper\classes $(HELPER_STUB) $(HELPER_SRC)
+	@powershell -NoProfile -ExecutionPolicy Bypass -Command "$$classes = Get-ChildItem -Path '$(BUILD_DIR)\helper\classes\dev\clipsync\bridge' -Filter '*.class' | ForEach-Object { $$_.FullName }; & '$(D8)' --lib '$(ANDROID_JAR)' --classpath '$(BUILD_DIR)\helper\classes' --output '$(BUILD_DIR)\helper\dex' $$classes"
+	@powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path '$(BUILD_DIR)\helper\dex\classes.dex' -DestinationPath '$(HELPER_JAR)' -Force"
+
 clean:
-	@powershell -NoProfile -ExecutionPolicy Bypass -Command "Remove-Item -LiteralPath '$(BUILD_DIR)','$(DIST_DIR)','$(ZYGISK_SO)' -Recurse -Force -ErrorAction SilentlyContinue"
+	@powershell -NoProfile -ExecutionPolicy Bypass -Command "Remove-Item -LiteralPath '$(BUILD_DIR)','$(DIST_DIR)','$(ZYGISK_SO)','$(HELPER_JAR)' -Recurse -Force -ErrorAction SilentlyContinue"
 	-@$(NDK_BUILD) -C zygisk clean 2>nul
 
 install: $(TARGET)
 	adb push $(TARGET) /data/local/tmp/
 	adb shell su -c "chmod 755 /data/local/tmp/clipsyncd"
 
-module: $(TARGET) $(ZYGISK_SO) $(CONFIG_SRC)
+module: $(TARGET) $(ZYGISK_SO) $(HELPER_JAR) $(CONFIG_SRC)
 	@if not exist module\system\bin mkdir module\system\bin
 	@if not exist module\config mkdir module\config
 	@copy /Y build\clipsyncd module\system\bin\clipsyncd >nul
@@ -65,7 +79,7 @@ package: module
 	@echo KernelSU module package ready:
 	@echo   $(PACKAGE)
 
-.PHONY: all clean install module package test test-crypto test-json test-clipboard-poll test-daemon-config test-bridge-protocol test-bridge-client
+.PHONY: all clean install module package test test-crypto test-json test-daemon-config test-bridge-protocol test-bridge-client
 
 test: $(BUILD_DIR)/test_clip
 	adb push $(BUILD_DIR)/test_clip /data/local/tmp/
@@ -94,13 +108,6 @@ $(BUILD_DIR)/test_protocol_json: test_protocol_json.c protocol_json.c protocol_j
 test-json: $(BUILD_DIR)/test_protocol_json
 	adb push $(BUILD_DIR)/test_protocol_json /data/local/tmp/
 	adb shell su -c "chmod 755 /data/local/tmp/test_protocol_json && /data/local/tmp/test_protocol_json"
-
-$(BUILD_DIR)/test_clipboard_poll: test_clipboard_poll.c clipboard_poll.c clipboard_poll.h | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ test_clipboard_poll.c clipboard_poll.c
-
-test-clipboard-poll: $(BUILD_DIR)/test_clipboard_poll
-	adb push $(BUILD_DIR)/test_clipboard_poll /data/local/tmp/
-	adb shell su -c "chmod 755 /data/local/tmp/test_clipboard_poll && /data/local/tmp/test_clipboard_poll"
 
 $(BUILD_DIR)/test_bridge_protocol: test_bridge_protocol.c bridge_protocol.c bridge_protocol.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ test_bridge_protocol.c bridge_protocol.c

@@ -17,6 +17,7 @@ clipsync-daemon/build/
 clipsync-daemon/dist/
 clipsync-daemon/module/system/
 clipsync-daemon/module/zygisk/
+clipsync-daemon/module/clipsync-helper.jar
 clipsync-daemon/zygisk/libs/
 clipsync-daemon/zygisk/obj/
 clipsync-daemon/module/libzygisk_clipsync.so

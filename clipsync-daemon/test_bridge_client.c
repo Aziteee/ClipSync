@@ -29,7 +29,7 @@ static int connect_bridge(void) {
 int main(int argc, char **argv) {
     int fd;
     if (argc < 2) {
-        fprintf(stderr, "usage: test_bridge_client read|write [text]|has\n");
+        fprintf(stderr, "usage: test_bridge_client read|write [text]|has|watch\n");
         return 2;
     }
 
@@ -57,6 +57,12 @@ int main(int argc, char **argv) {
         }
     } else if (strcmp(argv[1], "has") == 0) {
         if (bridge_write_cstr(fd, "HAS\n") != 0) {
+            perror("write");
+            close(fd);
+            return 1;
+        }
+    } else if (strcmp(argv[1], "watch") == 0) {
+        if (bridge_write_cstr(fd, "WATCH\n") != 0) {
             perror("write");
             close(fd);
             return 1;
@@ -97,6 +103,11 @@ int main(int argc, char **argv) {
         free(body);
     } else {
         printf("%s", line);
+        fflush(stdout);
+    }
+    while (strcmp(argv[1], "watch") == 0 && bridge_read_line(fd, line, sizeof(line)) == 0) {
+        printf("%s", line);
+        fflush(stdout);
     }
     close(fd);
     return 0;

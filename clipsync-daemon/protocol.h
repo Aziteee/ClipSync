@@ -2,7 +2,6 @@
 #define CLIPSYNC_PROTOCOL_H
 
 #define WS_PORT 5287
-#define DEFAULT_DEBOUNCE_MS 300
 #define MDNS_SERVICE_TYPE "_clipsync._tcp"
 
 /* Message type tags */

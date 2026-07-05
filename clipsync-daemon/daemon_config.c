@@ -108,14 +108,6 @@ static int apply_pair(clipsync_daemon_config *cfg, const char *section, const ch
         return parse_string_value(value, cfg->secret, sizeof(cfg->secret));
     }
 
-    if (strcmp(section, "clipboard") == 0 && strcmp(key, "debounce_ms") == 0) {
-        if (parse_int_value(value, 1, 60000, &cfg->debounce_ms) != 0) {
-            fprintf(stderr, "[config] invalid clipboard.debounce_ms: %s\n", value);
-            return -1;
-        }
-        return 0;
-    }
-
     return 0;
 }
 
@@ -123,7 +115,6 @@ void clipsync_config_init(clipsync_daemon_config *cfg) {
     if (!cfg) return;
     memset(cfg, 0, sizeof(*cfg));
     cfg->port = WS_PORT;
-    cfg->debounce_ms = DEFAULT_DEBOUNCE_MS;
     cfg->secret[0] = '\0';
     copy_value(cfg->config_path, sizeof(cfg->config_path), CLIPSYNC_DEFAULT_CONFIG_PATH);
 }

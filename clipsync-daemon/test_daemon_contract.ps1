@@ -3,17 +3,20 @@ $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $service = Get-Content -Raw (Join-Path $root "module/service.sh")
+$postFsData = Get-Content -Raw (Join-Path $root "module/post-fs-data.sh")
 $daemonMain = Get-Content -Raw (Join-Path $root "clipsyncd.c")
 $daemonConfig = Get-Content -Raw (Join-Path $root "daemon_config.h")
 $makefile = Get-Content -Raw (Join-Path $root "Makefile")
 $zygiskMain = Get-Content -Raw (Join-Path $root "zygisk/jni/main.cpp")
+$bridgeProtocol = Get-Content -Raw (Join-Path $root "bridge_protocol.c")
+$clipBridgeClient = Get-Content -Raw (Join-Path $root "clip_bridge_client.c")
 $wsServer = Get-Content -Raw (Join-Path $root "ws_server.c")
 $mdnsPublish = Get-Content -Raw (Join-Path $root "mdns_publish.c")
 $legacyClipPrefix = "binder" + "_clip"
 $legacyClipSourcePattern = $legacyClipPrefix + "\.c"
 $legacyClipSymbolPattern = $legacyClipPrefix + "_"
 
-if ($service -notmatch "/data/adb/modules/clipsyncd/system/bin/clipsyncd") {
+if ($service -notmatch "system/bin/clipsyncd") {
     throw "service.sh must launch the packaged daemon at system/bin/clipsyncd"
 }
 
@@ -35,6 +38,14 @@ if ($daemonMain -notmatch "clipsync_config_load_from_args") {
 
 if ($makefile -notmatch "module\\config\\clipsync\.toml") {
     throw "make module must package clipsync.toml into module/config"
+}
+
+if ($makefile -notmatch "clipsync-helper\.jar" -or $makefile -notmatch "d8") {
+    throw "make module must build and package the ClipSync helper dex jar"
+}
+
+if ($postFsData -notmatch "/data/system/clipsync-helper\.jar" -or $postFsData -notmatch "chown system:system") {
+    throw "post-fs-data.sh must copy the helper jar to a system_server-readable path"
 }
 
 if ($makefile -notmatch "clip_bridge_client\.c") {
@@ -93,16 +104,32 @@ if ($mdnsPublish -notmatch '"\\x11"\s+"auth=hmac-sha256"') {
     throw "mdns DNS-SD TXT length for auth=hmac-sha256 must be 0x11"
 }
 
-if ($daemonMain -notmatch "poll_clipboard_change") {
-    throw "clipsyncd must poll Android clipboard changes for phone-to-PC sync"
+if ($daemonMain -notmatch "handle_clipboard_event") {
+    throw "clipsyncd must handle clipbridge WATCH events for phone-to-PC sync"
 }
 
-if ($daemonMain -notmatch "ws_server_authenticated_count") {
-    throw "clipsyncd must adapt clipboard polling based on authenticated WebSocket clients"
+if ($daemonMain -notmatch "clip_bridge_watch_start" -or $daemonMain -notmatch "clip_bridge_watch_take_changed") {
+    throw "clipsyncd must use event-driven clipbridge WATCH notifications"
 }
 
-if ($daemonMain -notmatch "cfg\.debounce_ms") {
-    throw "clipsyncd must apply configured clipboard.debounce_ms to polling"
+if ($clipBridgeClient -notmatch "WATCH\\n" -or $clipBridgeClient -notmatch "CLIPSYNC_WATCH_LINE_CHANGED") {
+    throw "clip_bridge_client must implement WATCH change notifications"
+}
+
+if ($bridgeProtocol -notmatch "READY\\n" -or $bridgeProtocol -notmatch "CHANGED\\n") {
+    throw "bridge protocol must parse WATCH READY/CHANGED lines"
+}
+
+if ($daemonMain -match "clip_bridge_watch_is_ready" -or $daemonMain -match "clipboard_poll_ticks" -or $daemonMain -match "clipsync_clipboard_poll_ticks_for_clients") {
+    throw "clipsyncd must not fall back to periodic clipboard polling"
+}
+
+if ($daemonMain -match "polling fallback" -or $daemonMain -match "using polling") {
+    throw "clipsyncd must not advertise or use polling fallback"
+}
+
+if ($makefile -match "clipboard_poll\.c" -or $makefile -match "test_clipboard_poll") {
+    throw "daemon build must not include clipboard polling helpers"
 }
 
 if ($wsServer -notmatch "AUTH_TIMEOUT_MS" -or $wsServer -notmatch "auth_deadline_ms") {
@@ -143,6 +170,22 @@ if ($zygiskMain -notmatch "SO_PEERCRED" -or $zygiskMain -notmatch "cred\.uid != 
 
 if ($zygiskMain -notmatch "WRITE <len>" -or $zygiskMain -notmatch "DATA %lu") {
     throw "Zygisk bridge must use the length-prefixed bridge protocol"
+}
+
+if ($zygiskMain -notmatch "addPrimaryClipChangedListener" -or $zygiskMain -notmatch "IOnPrimaryClipChangedListener") {
+    throw "Zygisk bridge must register an IOnPrimaryClipChangedListener"
+}
+
+if ($zygiskMain -notmatch "/data/system/clipsync-helper\.jar") {
+    throw "Zygisk bridge must load the helper jar from the system_server-readable copy"
+}
+
+if ($zygiskMain -notmatch "WATCH\\n" -or $zygiskMain -notmatch "CHANGED\\n" -or $zygiskMain -notmatch "MSG_DONTWAIT") {
+    throw "Zygisk bridge must expose event-driven WATCH notifications"
+}
+
+if ($zygiskMain -notmatch "watch_unavailable" -or $zygiskMain -notmatch "g_clip_listener") {
+    throw "Zygisk bridge must reject WATCH when listener registration failed"
 }
 
 Write-Host "daemon contract checks passed"
