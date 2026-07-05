@@ -17,7 +17,7 @@ ZYGISK_BUILD_SO = zygisk/libs/arm64-v8a/libzygisk_clipsync.so
 DIST_DIR = dist
 PACKAGE = $(DIST_DIR)/clipsyncd-module.zip
 CONFIG_SRC = config/clipsync.toml
-HELPER_JAR = module/system/etc/clipsync-helper.jar
+HELPER_JAR = module/zygisk/clipsync-helper.jar
 HELPER_SRC = zygisk/helper/src/dev/clipsync/bridge/ClipSyncBridgeHelper.java
 HELPER_STUB = zygisk/helper/stubs/android/content/IOnPrimaryClipChangedListener.java
 
@@ -45,7 +45,8 @@ $(ZYGISK_SO): zygisk/jni/main.cpp zygisk/jni/zygisk.hpp zygisk/jni/Android.mk zy
 	copy /Y zygisk\libs\arm64-v8a\libzygisk_clipsync.so $(ZYGISK_SO)
 
 $(HELPER_JAR): $(HELPER_SRC) $(HELPER_STUB)
-	@powershell -NoProfile -ExecutionPolicy Bypass -Command "Remove-Item -LiteralPath '$(BUILD_DIR)\helper','$(HELPER_JAR)' -Recurse -Force -ErrorAction SilentlyContinue; New-Item -ItemType Directory -Force -Path '$(BUILD_DIR)\helper\classes','$(BUILD_DIR)\helper\dex','module\system\etc' | Out-Null"
+	@powershell -NoProfile -ExecutionPolicy Bypass -Command "Remove-Item -LiteralPath '$(BUILD_DIR)\helper','$(HELPER_JAR)' -Recurse -Force -ErrorAction SilentlyContinue; New-Item -ItemType Directory -Force -Path '$(BUILD_DIR)\helper\classes','$(BUILD_DIR)\helper\dex' | Out-Null"
+	@if not exist module\zygisk mkdir module\zygisk
 	javac -source 8 -target 8 -bootclasspath "$(ANDROID_JAR)" -d $(BUILD_DIR)\helper\classes $(HELPER_STUB) $(HELPER_SRC)
 	@powershell -NoProfile -ExecutionPolicy Bypass -Command "$$classes = Get-ChildItem -Path '$(BUILD_DIR)\helper\classes\dev\clipsync\bridge' -Filter '*.class' | ForEach-Object { $$_.FullName }; & '$(D8)' --lib '$(ANDROID_JAR)' --classpath '$(BUILD_DIR)\helper\classes' --output '$(BUILD_DIR)\helper\dex' $$classes"
 	@powershell -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path '$(BUILD_DIR)\helper\dex\classes.dex' -DestinationPath '$(HELPER_JAR)' -Force"
