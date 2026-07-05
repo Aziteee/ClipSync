@@ -46,7 +46,7 @@
  * sun_path[0] == '\0', actual name follows. */
 #define SOCK_ABSTRACT_NAME "clipbridge"
 static constexpr const char *kClipboardCallerPackage = "android";
-static constexpr const char *kHelperJarPath = "/data/system/clipsync-helper.jar";
+static constexpr const char *kHelperJarPath = "/system/etc/clipsync-helper.jar";
 static constexpr const char *kHelperBinaryClassName = "dev.clipsync.bridge.ClipSyncBridgeHelper";
 
 using zygisk::Api;
@@ -196,15 +196,15 @@ static bool register_native_callback(jclass helperClass) {
 static jclass load_helper_class() {
     if (!g_env) return nullptr;
     file_log("load_helper_class: start path=%s", kHelperJarPath);
-    jclass loaderClass = find_class("dalvik/system/DexClassLoader");
+    jclass loaderClass = find_class("dalvik/system/PathClassLoader");
     if (!loaderClass) {
-        file_log("load_helper_class: DexClassLoader class missing");
+        file_log("load_helper_class: PathClassLoader class missing");
         return nullptr;
     }
 
-    jmethodID ctor = g_env->GetMethodID(loaderClass, "<init>", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V");
-    if (!ctor || !jni_ok("DexClassLoader.<init>")) {
-        file_log("load_helper_class: DexClassLoader ctor missing");
+    jmethodID ctor = g_env->GetMethodID(loaderClass, "<init>", "(Ljava/lang/String;Ljava/lang/ClassLoader;)V");
+    if (!ctor || !jni_ok("PathClassLoader.<init>")) {
+        file_log("load_helper_class: PathClassLoader ctor missing");
         g_env->DeleteLocalRef(loaderClass);
         return nullptr;
     }
@@ -235,12 +235,10 @@ static jclass load_helper_class() {
     }
 
     jstring path = g_env->NewStringUTF(kHelperJarPath);
-    jstring optDir = g_env->NewStringUTF("/data/system");
-    jobject loader = (path && optDir) ? g_env->NewObject(loaderClass, ctor, path, optDir, nullptr, parent) : nullptr;
-    if (!loader || !jni_ok("DexClassLoader.new")) {
-        file_log("load_helper_class: DexClassLoader.new failed");
+    jobject loader = path ? g_env->NewObject(loaderClass, ctor, path, parent) : nullptr;
+    if (!loader || !jni_ok("PathClassLoader.new")) {
+        file_log("load_helper_class: PathClassLoader.new failed");
         if (path) g_env->DeleteLocalRef(path);
-        if (optDir) g_env->DeleteLocalRef(optDir);
         if (loader) g_env->DeleteLocalRef(loader);
         if (parent) g_env->DeleteLocalRef(parent);
         if (baseLoaderClass) g_env->DeleteLocalRef(baseLoaderClass);
@@ -266,7 +264,6 @@ static jclass load_helper_class() {
     if (parent) g_env->DeleteLocalRef(parent);
     if (baseLoaderClass) g_env->DeleteLocalRef(baseLoaderClass);
     g_env->DeleteLocalRef(path);
-    if (optDir) g_env->DeleteLocalRef(optDir);
     g_env->DeleteLocalRef(classClass);
     g_env->DeleteLocalRef(loaderClass);
     return helper;

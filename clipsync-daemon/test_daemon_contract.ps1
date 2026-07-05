@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $service = Get-Content -Raw (Join-Path $root "module/service.sh")
-$postFsData = Get-Content -Raw (Join-Path $root "module/post-fs-data.sh")
+$sepolicyRule = Get-Content -Raw (Join-Path $root "module/sepolicy.rule")
 $daemonMain = Get-Content -Raw (Join-Path $root "clipsyncd.c")
 $daemonConfig = Get-Content -Raw (Join-Path $root "daemon_config.h")
 $makefile = Get-Content -Raw (Join-Path $root "Makefile")
@@ -40,12 +40,20 @@ if ($makefile -notmatch "module\\config\\clipsync\.toml") {
     throw "make module must package clipsync.toml into module/config"
 }
 
-if ($makefile -notmatch "clipsync-helper\.jar" -or $makefile -notmatch "d8") {
+if ($makefile -notmatch "module[\\/]system[\\/]etc[\\/]clipsync-helper\.jar" -or $makefile -notmatch "d8") {
     throw "make module must build and package the ClipSync helper dex jar"
 }
 
-if ($postFsData -notmatch "/data/system/clipsync-helper\.jar" -or $postFsData -notmatch "chown system:system") {
-    throw "post-fs-data.sh must copy the helper jar to a system_server-readable path"
+if (Test-Path (Join-Path $root "module/post-fs-data.sh")) {
+    throw "module must not copy helper jar into /data/system; use systemless module/system/etc instead"
+}
+
+if (Test-Path (Join-Path $root "module/skip_mount")) {
+    throw "module must not disable systemless mounting because helper jar is exposed via module/system/etc"
+}
+
+if ($sepolicyRule -notmatch "allow\s+system_server\s+adb_data_file\s+file\s+\{[^}]*getattr[^}]*open[^}]*read[^}]*map[^}]*\}") {
+    throw "module sepolicy must let system_server read the mounted helper jar when module files keep adb_data_file labels"
 }
 
 if ($makefile -notmatch "clip_bridge_client\.c") {
@@ -176,8 +184,16 @@ if ($zygiskMain -notmatch "addPrimaryClipChangedListener" -or $zygiskMain -notma
     throw "Zygisk bridge must register an IOnPrimaryClipChangedListener"
 }
 
-if ($zygiskMain -notmatch "/data/system/clipsync-helper\.jar") {
-    throw "Zygisk bridge must load the helper jar from the system_server-readable copy"
+if ($zygiskMain -notmatch "/system/etc/clipsync-helper\.jar") {
+    throw "Zygisk bridge must load the helper jar from the systemless /system/etc mount"
+}
+
+if ($zygiskMain -notmatch "PathClassLoader" -or $zygiskMain -match "DexClassLoader") {
+    throw "Zygisk bridge must load the mounted helper jar with PathClassLoader"
+}
+
+if ($zygiskMain -match "/data/system/clipsync-helper\.jar") {
+    throw "Zygisk bridge must not depend on a copied /data/system helper jar"
 }
 
 if ($zygiskMain -notmatch "WATCH\\n" -or $zygiskMain -notmatch "CHANGED\\n" -or $zygiskMain -notmatch "MSG_DONTWAIT") {
