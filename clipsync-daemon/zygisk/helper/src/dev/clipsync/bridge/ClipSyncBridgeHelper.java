@@ -22,7 +22,6 @@ public final class ClipSyncBridgeHelper {
         return new IOnPrimaryClipChangedListener.Stub() {
             @Override
             public void dispatchPrimaryClipChanged() {
-                Log.d(TAG, "dispatchPrimaryClipChanged");
                 nativeOnClipboardChanged();
             }
         };
@@ -46,7 +45,6 @@ public final class ClipSyncBridgeHelper {
 
             Method register = callbacks.getClass().getMethod("register", android.os.IInterface.class, Object.class);
             Boolean ok = (Boolean) register.invoke(callbacks, listener, cookie);
-            Log.d(TAG, "direct listener register " + ok + " package=" + identity.packageName + " uid=" + identity.uid);
             return Boolean.TRUE.equals(ok);
         } catch (Throwable t) {
             Log.e(TAG, "direct listener register failed", t);

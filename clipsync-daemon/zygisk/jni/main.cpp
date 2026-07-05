@@ -27,18 +27,11 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <vector>
-#include <cstdarg>
 
 #define TAG "ClipSyncBridge"
 
-#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
 
-#ifndef CLIPSYNC_BRIDGE_FILE_LOG
-#define CLIPSYNC_BRIDGE_FILE_LOG 0
-#endif
-
-#include <fcntl.h>
 
 /* Abstract Unix socket: no filesystem path, no init/SELinux path labels.
  * sun_path[0] == '\0', actual name follows. */
@@ -61,26 +54,6 @@ static jobject g_clip_listener = nullptr;
 static std::vector<uint8_t> g_moduleDex;
 static constexpr const char *kModuleDexPath = "/data/adb/modules/clipsyncd/zygisk/clipsync-helper.dex";
 
-#if CLIPSYNC_BRIDGE_FILE_LOG
-static void file_log(const char *fmt, ...) {
-    int fd = open("/data/system/clipsync_bridge.log", O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
-    if (fd < 0) return;
-
-    char buf[512];
-    va_list ap;
-    va_start(ap, fmt);
-    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
-    va_end(ap);
-    if (n > 0) {
-        size_t len = (size_t)n < sizeof(buf) ? (size_t)n : sizeof(buf) - 1;
-        write(fd, buf, len);
-        write(fd, "\n", 1);
-    }
-    close(fd);
-}
-#else
-static void file_log(const char *, ...) {}
-#endif
 
 static bool jni_clear_exception(const char *ctx) {
     if (!g_env || !g_env->ExceptionCheck()) return false;
@@ -91,13 +64,10 @@ static bool jni_clear_exception(const char *ctx) {
         jmethodID toString = exClass ? g_env->GetMethodID(exClass, "toString", "()Ljava/lang/String;") : nullptr;
         jstring msg = toString ? (jstring)g_env->CallObjectMethod(ex, toString) : nullptr;
         const char *chars = msg ? g_env->GetStringUTFChars(msg, nullptr) : nullptr;
-        file_log("%s: JNI exception: %s", ctx, chars ? chars : "(toString unavailable)");
         if (msg && chars) g_env->ReleaseStringUTFChars(msg, chars);
         if (msg) g_env->DeleteLocalRef(msg);
         if (exClass) g_env->DeleteLocalRef(exClass);
         g_env->DeleteLocalRef(ex);
-    } else {
-        file_log("%s: JNI exception", ctx);
     }
     LOGE("%s: JNI exception", ctx);
     return true;
@@ -160,7 +130,6 @@ static void add_watcher(int fd) {
 
 static void notify_watchers(void) {
     pthread_mutex_lock(&g_watchers_mutex);
-    file_log("notify_watchers: count=%lu", (unsigned long)g_watchers.size());
     for (auto it = g_watchers.begin(); it != g_watchers.end();) {
         int fd = *it;
         ssize_t n = send(fd, "CHANGED\n", 8, MSG_DONTWAIT | MSG_NOSIGNAL);
@@ -211,7 +180,6 @@ REGISTER_ZYGISK_COMPANION(companion_handler)
 
 extern "C" JNIEXPORT void JNICALL
 Java_dev_clipsync_bridge_ClipSyncBridgeHelper_nativeOnClipboardChanged(JNIEnv *, jclass) {
-    file_log("nativeOnClipboardChanged");
     notify_watchers();
 }
 
@@ -229,29 +197,24 @@ static bool register_native_callback(jclass helperClass) {
 
 static jclass load_helper_class() {
     if (!g_env || g_moduleDex.empty()) {
-        file_log("load_helper_class: no DEX bytes");
         return nullptr;
     }
 
-    file_log("load_helper_class: start size=%lu", (unsigned long)g_moduleDex.size());
 
     jclass dexClClass = find_class("dalvik/system/InMemoryDexClassLoader");
     if (!dexClClass) {
-        file_log("load_helper_class: InMemoryDexClassLoader class missing");
         return nullptr;
     }
 
     jmethodID dexClInit = g_env->GetMethodID(dexClClass, "<init>",
         "(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V");
     if (!dexClInit || !jni_ok("InMemoryDexClassLoader.<init>")) {
-        file_log("load_helper_class: InMemoryDexClassLoader ctor missing");
         g_env->DeleteLocalRef(dexClClass);
         return nullptr;
     }
 
     jobject buf = g_env->NewDirectByteBuffer(g_moduleDex.data(), (jlong)g_moduleDex.size());
     if (!buf || !jni_ok("NewDirectByteBuffer")) {
-        file_log("load_helper_class: NewDirectByteBuffer failed");
         if (buf) g_env->DeleteLocalRef(buf);
         g_env->DeleteLocalRef(dexClClass);
         return nullptr;
@@ -267,11 +230,9 @@ static jclass load_helper_class() {
     if (!parent || !jni_ok("ClassLoader.getSystemClassLoader")) {
         parent = nullptr;
     }
-    file_log("load_helper_class: parent=%s", parent ? "ok" : "null");
 
     jobject dexCl = g_env->NewObject(dexClClass, dexClInit, buf, parent);
     if (!dexCl || !jni_ok("InMemoryDexClassLoader.new")) {
-        file_log("load_helper_class: InMemoryDexClassLoader.new failed");
         if (dexCl) g_env->DeleteLocalRef(dexCl);
         g_env->DeleteLocalRef(buf);
         if (parent) g_env->DeleteLocalRef(parent);
@@ -285,7 +246,6 @@ static jclass load_helper_class() {
         ? get_static_method(classClass, "forName", "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;")
         : nullptr;
     if (!forName) {
-        file_log("load_helper_class: Class.forName unavailable");
         g_env->DeleteLocalRef(dexCl);
         g_env->DeleteLocalRef(buf);
         if (parent) g_env->DeleteLocalRef(parent);
@@ -301,10 +261,7 @@ static jclass load_helper_class() {
         : nullptr;
     bool loaded = jni_ok("Class.forName ClipSyncBridgeHelper");
     if (!helper || !loaded) {
-        file_log("load_helper_class: Class.forName failed helper=%p loaded=%d", helper, loaded ? 1 : 0);
         helper = nullptr;
-    } else {
-        file_log("load_helper_class: helper loaded via InMemoryDexClassLoader");
     }
 
     if (name) g_env->DeleteLocalRef(name);
@@ -346,18 +303,15 @@ static bool register_clipboard_listener(void) {
     jclass helper = load_helper_class();
     if (!helper) {
         LOGE("clipboard listener helper not loaded (InMemoryDexClassLoader)");
-        file_log("register_clipboard_listener: helper not loaded");
         return false;
     }
     if (!register_native_callback(helper)) {
-        file_log("register_clipboard_listener: RegisterNatives failed");
         g_env->DeleteLocalRef(helper);
         return false;
     }
 
     jmethodID makeListener = get_static_method(helper, "makeListener", "()Landroid/content/IOnPrimaryClipChangedListener;");
     if (!makeListener) {
-        file_log("register_clipboard_listener: makeListener missing");
         g_env->DeleteLocalRef(helper);
         return false;
     }
@@ -366,7 +320,6 @@ static bool register_clipboard_listener(void) {
     if (!jni_ok("ClipSyncBridgeHelper.makeListener")) listener = nullptr;
     if (!listener) {
         LOGE("clipboard listener creation failed");
-        file_log("register_clipboard_listener: listener creation failed");
         g_env->DeleteLocalRef(helper);
         return false;
     }
@@ -376,7 +329,6 @@ static bool register_clipboard_listener(void) {
         g_env->DeleteLocalRef(listener);
         g_env->DeleteLocalRef(helper);
         LOGE("register listener: service null");
-        file_log("register_clipboard_listener: service null");
         return false;
     }
     jclass iclip = g_env->GetObjectClass(svc);
@@ -443,13 +395,8 @@ static bool register_clipboard_listener(void) {
     g_env->DeleteLocalRef(listener);
     g_env->DeleteLocalRef(helper);
 
-    if (ok) {
-        LOGD("clipboard listener registered");
-        file_log("register_clipboard_listener: registered public=%d direct=%d",
-                 public_ok ? 1 : 0, direct_ok ? 1 : 0);
-    } else {
+    if (!ok) {
         LOGE("clipboard listener registration failed");
-        file_log("register_clipboard_listener: registration failed");
     }
     return ok;
 }
@@ -507,53 +454,6 @@ static char *clipDataToText(jobject cd) {
     return result;
 }
 
-static void logClassFields(jclass cls, const char *prefix) {
-    jclass classClass = g_env->FindClass("java/lang/Class");
-    jmethodID getName = g_env->GetMethodID(classClass, "getName", "()Ljava/lang/String;");
-    jmethodID getDeclaredFields = g_env->GetMethodID(classClass, "getDeclaredFields", "()[Ljava/lang/reflect/Field;");
-    jmethodID getSuperclass = g_env->GetMethodID(classClass, "getSuperclass", "()Ljava/lang/Class;");
-    jclass fieldClass = g_env->FindClass("java/lang/reflect/Field");
-    jmethodID fieldGetName = g_env->GetMethodID(fieldClass, "getName", "()Ljava/lang/String;");
-    jmethodID fieldGetType = g_env->GetMethodID(fieldClass, "getType", "()Ljava/lang/Class;");
-
-    for (int depth = 0; cls && depth < 4; depth++) {
-        jstring className = (jstring)g_env->CallObjectMethod(cls, getName);
-        const char *classNameChars = className ? g_env->GetStringUTFChars(className, nullptr) : nullptr;
-        LOGD("%s class[%d]=%s", prefix, depth, classNameChars ? classNameChars : "(null)");
-        if (className && classNameChars) g_env->ReleaseStringUTFChars(className, classNameChars);
-        if (className) g_env->DeleteLocalRef(className);
-
-        jobjectArray fields = (jobjectArray)g_env->CallObjectMethod(cls, getDeclaredFields);
-        if (fields && !g_env->ExceptionCheck()) {
-            jsize count = g_env->GetArrayLength(fields);
-            for (jsize i = 0; i < count && i < 80; i++) {
-                jobject field = g_env->GetObjectArrayElement(fields, i);
-                jstring fieldName = (jstring)g_env->CallObjectMethod(field, fieldGetName);
-                jclass fieldType = (jclass)g_env->CallObjectMethod(field, fieldGetType);
-                jstring fieldTypeName = fieldType ? (jstring)g_env->CallObjectMethod(fieldType, getName) : nullptr;
-                const char *fieldNameChars = fieldName ? g_env->GetStringUTFChars(fieldName, nullptr) : nullptr;
-                const char *fieldTypeChars = fieldTypeName ? g_env->GetStringUTFChars(fieldTypeName, nullptr) : nullptr;
-                LOGD("%s field[%d]=%s type=%s", prefix, (int)i, fieldNameChars ? fieldNameChars : "(null)", fieldTypeChars ? fieldTypeChars : "(null)");
-                if (fieldTypeName && fieldTypeChars) g_env->ReleaseStringUTFChars(fieldTypeName, fieldTypeChars);
-                if (fieldTypeName) g_env->DeleteLocalRef(fieldTypeName);
-                if (fieldType) g_env->DeleteLocalRef(fieldType);
-                if (fieldName && fieldNameChars) g_env->ReleaseStringUTFChars(fieldName, fieldNameChars);
-                if (fieldName) g_env->DeleteLocalRef(fieldName);
-                g_env->DeleteLocalRef(field);
-            }
-            g_env->DeleteLocalRef(fields);
-        } else if (g_env->ExceptionCheck()) {
-            g_env->ExceptionClear();
-        }
-
-        jclass superCls = (jclass)g_env->CallObjectMethod(cls, getSuperclass);
-        if (depth > 0) g_env->DeleteLocalRef(cls);
-        cls = superCls;
-    }
-    if (cls) g_env->DeleteLocalRef(cls);
-    g_env->DeleteLocalRef(fieldClass);
-    g_env->DeleteLocalRef(classClass);
-}
 
 static jobject readClipboardDirect(jobject impl) {
     if (!impl) return nullptr;
@@ -589,7 +489,6 @@ static jobject readClipboardDirect(jobject impl) {
     }
     if (!clipboardsField) {
         jni_clear_exception("mClipboards SparseArrayMap probe");
-        logClassFields(serviceClass, "ClipboardService");
         g_env->DeleteLocalRef(serviceClass);
         g_env->DeleteLocalRef(service);
         LOGE("readClipboardDirect: mClipboards not found (neither SparseArray nor SparseArrayMap)");
@@ -652,7 +551,6 @@ static jobject readClipboardDirect(jobject impl) {
     jfieldID primaryClipField = g_env->GetFieldID(perUserClass, "primaryClip", "Landroid/content/ClipData;");
     if (!primaryClipField) {
         jni_clear_exception("primaryClip probe");
-        logClassFields(perUserClass, "PerUserState");
         g_env->DeleteLocalRef(perUserClass);
         g_env->DeleteLocalRef(perUser);
         LOGE("readClipboardDirect: primaryClip not found");
@@ -868,7 +766,6 @@ static void handle_client(int fd) {
             fcntl(fd, F_SETFL, flags | O_NONBLOCK);
         }
         add_watcher(fd);
-        LOGD("WATCH ready fd=%d", fd);
         return;
     } else {
         write_err(fd, "unknown_command");
@@ -885,7 +782,6 @@ static void *socket_thread(void *) {
         return nullptr;
     }
     g_env = env;
-    LOGD("socket_thread attached to JVM");
     if (!register_clipboard_listener()) {
         LOGE("clipboard listener unavailable; WATCH clients will be rejected");
     }
@@ -910,7 +806,6 @@ static void *socket_thread(void *) {
             fd = -1;
         } else {
             listen(fd, 5);
-            LOGD("socket listening on @%s", SOCK_ABSTRACT_NAME);
             while (true) {
                 int client = accept(fd, nullptr, nullptr);
                 if (client < 0) break;
@@ -967,7 +862,6 @@ public:
         }
 
         close(fd);
-        LOGD("companion: received %u bytes DEX", size);
     }
 
     void postServerSpecialize(const ServerSpecializeArgs *args) override {
