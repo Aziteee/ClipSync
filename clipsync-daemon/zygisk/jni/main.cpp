@@ -145,11 +145,22 @@ static void notify_watchers(void) {
     pthread_mutex_unlock(&g_watchers_mutex);
 }
 
+static bool xwrite(int fd, const void *buf, size_t len) {
+    const char *p = (const char *)buf;
+    while (len > 0) {
+        ssize_t n = write(fd, p, len);
+        if (n < 0) return false;
+        p += n;
+        len -= (size_t)n;
+    }
+    return true;
+}
+
 static void companion_handler(int fd) {
     int dex_fd = open(kModuleDexPath, O_RDONLY);
     if (dex_fd < 0) {
         uint32_t size = 0;
-        write(fd, &size, sizeof(size));
+        xwrite(fd, &size, sizeof(size));
         return;
     }
 
@@ -157,13 +168,16 @@ static void companion_handler(int fd) {
     lseek(dex_fd, 0, SEEK_SET);
     if (end <= 0 || (uint64_t)end > UINT32_MAX) {
         uint32_t size = 0;
-        write(fd, &size, sizeof(size));
+        xwrite(fd, &size, sizeof(size));
         close(dex_fd);
         return;
     }
 
     uint32_t size = (uint32_t)end;
-    write(fd, &size, sizeof(size));
+    if (!xwrite(fd, &size, sizeof(size))) {
+        close(dex_fd);
+        return;
+    }
 
     char buf[4096];
     uint32_t remain = size;
@@ -171,7 +185,7 @@ static void companion_handler(int fd) {
         size_t chunk = remain < sizeof(buf) ? (size_t)remain : sizeof(buf);
         ssize_t n = read(dex_fd, buf, chunk);
         if (n <= 0) break;
-        write(fd, buf, (size_t)n);
+        if (!xwrite(fd, buf, (size_t)n)) break;
         remain -= (uint32_t)n;
     }
     close(dex_fd);
@@ -866,8 +880,15 @@ public:
 
     void postServerSpecialize(const ServerSpecializeArgs *args) override {
         (void)args;
+        if (!g_vm) {
+            LOGE("JavaVM unavailable; socket server will not start");
+            return;
+        }
         pthread_t t;
-        pthread_create(&t, nullptr, socket_thread, nullptr);
+        if (pthread_create(&t, nullptr, socket_thread, nullptr) != 0) {
+            LOGE("pthread_create socket_thread failed: %s", strerror(errno));
+            return;
+        }
         pthread_detach(t);
     }
 };

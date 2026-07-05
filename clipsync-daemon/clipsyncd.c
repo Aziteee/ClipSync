@@ -4,6 +4,7 @@
 #include <signal.h>
 #include <unistd.h>
 #include <time.h>
+#include <sys/wait.h>
 #include <stdint.h>
 #include "protocol.h"
 #include "clip_bridge_client.h"
@@ -22,9 +23,7 @@ static int g_bridge_healthy = 0;
 
 static long long monotonic_millis(void) {
     struct timespec ts;
-    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
-        return (long long)time(NULL) * 1000LL;
-    }
+    clock_gettime(CLOCK_MONOTONIC, &ts);
     return (long long)ts.tv_sec * 1000LL + (long long)(ts.tv_nsec / 1000000LL);
 }
 
@@ -65,8 +64,18 @@ static void update_module_status(clipsync_daemon_config *cfg) {
     if (strcmp(cmd, last_cmd) == 0) return;
     strncpy(last_cmd, cmd, sizeof(last_cmd) - 1);
 
-    if (system(cmd) != 0) {
-        fprintf(stderr, "[clipsyncd] failed to update module description\n");
+    {
+        pid_t pid = fork();
+        if (pid < 0) {
+            fprintf(stderr, "[clipsyncd] fork failed for module status update\n");
+            return;
+        }
+        if (pid == 0) {
+            if (fork() > 0) _exit(0);
+            execl("/system/bin/sh", "sh", "-c", cmd, (char *)NULL);
+            _exit(127);
+        }
+        waitpid(pid, NULL, 0);
     }
 }
 
