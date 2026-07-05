@@ -59,7 +59,7 @@ static std::vector<int> g_watchers;
 static jobject g_clip_listener = nullptr;
 
 static std::vector<uint8_t> g_moduleDex;
-static constexpr const char *kModuleDexPath = "/data/adb/modules/clipsyncd/zygisk/clipsync-helper.jar";
+static constexpr const char *kModuleDexPath = "/data/adb/modules/clipsyncd/zygisk/clipsync-helper.dex";
 
 #if CLIPSYNC_BRIDGE_FILE_LOG
 static void file_log(const char *fmt, ...) {
