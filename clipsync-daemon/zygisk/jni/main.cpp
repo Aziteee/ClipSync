@@ -26,7 +26,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <pthread.h>
-#include <fcntl.h>
 #include <vector>
 #include <cstdarg>
 
@@ -34,6 +33,14 @@
 
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+
+#ifndef CLIPSYNC_BRIDGE_FILE_LOG
+#define CLIPSYNC_BRIDGE_FILE_LOG 0
+#endif
+
+#if CLIPSYNC_BRIDGE_FILE_LOG
+#include <fcntl.h>
+#endif
 
 /* Abstract Unix socket: no filesystem path, no init/SELinux path labels.
  * sun_path[0] == '\0', actual name follows. */
@@ -53,6 +60,7 @@ static pthread_mutex_t g_watchers_mutex = PTHREAD_MUTEX_INITIALIZER;
 static std::vector<int> g_watchers;
 static jobject g_clip_listener = nullptr;
 
+#if CLIPSYNC_BRIDGE_FILE_LOG
 static void file_log(const char *fmt, ...) {
     int fd = open("/data/system/clipsync_bridge.log", O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
     if (fd < 0) return;
@@ -69,6 +77,9 @@ static void file_log(const char *fmt, ...) {
     }
     close(fd);
 }
+#else
+static void file_log(const char *, ...) {}
+#endif
 
 static bool jni_clear_exception(const char *ctx) {
     if (!g_env || !g_env->ExceptionCheck()) return false;
