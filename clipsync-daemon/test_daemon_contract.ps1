@@ -3,7 +3,6 @@ $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $service = Get-Content -Raw (Join-Path $root "module/service.sh")
-$sepolicyRule = Get-Content -Raw (Join-Path $root "module/sepolicy.rule")
 $daemonMain = Get-Content -Raw (Join-Path $root "clipsyncd.c")
 $daemonConfig = Get-Content -Raw (Join-Path $root "daemon_config.h")
 $makefile = Get-Content -Raw (Join-Path $root "Makefile")
@@ -42,20 +41,12 @@ if ($makefile -notmatch "module\\config\\clipsync\.toml") {
     throw "make module must package clipsync.toml into module/config"
 }
 
-if ($makefile -notmatch "module[\\/]system[\\/]etc[\\/]clipsync-helper\.jar" -or $makefile -notmatch "d8") {
-    throw "make module must build and package the ClipSync helper dex jar"
+if ($makefile -notmatch "module[\\/]zygisk[\\/]clipsync-helper\.dex" -or $makefile -notmatch "d8") {
+    throw "make module must build and package the ClipSync helper dex"
 }
 
-if (Test-Path (Join-Path $root "module/post-fs-data.sh")) {
-    throw "module must not copy helper jar into /data/system; use systemless module/system/etc instead"
-}
-
-if (Test-Path (Join-Path $root "module/skip_mount")) {
-    throw "module must not disable systemless mounting because helper jar is exposed via module/system/etc"
-}
-
-if ($sepolicyRule -notmatch "allow\s+system_server\s+adb_data_file\s+file\s+\{[^}]*getattr[^}]*open[^}]*read[^}]*map[^}]*\}") {
-    throw "module sepolicy must let system_server read the mounted helper jar when module files keep adb_data_file labels"
+if (Test-Path (Join-Path $root "module/sepolicy.rule")) {
+    throw "sepolicy.rule is no longer needed; companion process reads DEX as root"
 }
 
 if ($makefile -notmatch "clip_bridge_client\.c") {
