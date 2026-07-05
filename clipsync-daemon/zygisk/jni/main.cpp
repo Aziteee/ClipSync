@@ -228,18 +228,32 @@ static bool register_native_callback(jclass helperClass) {
 }
 
 static jclass load_helper_class() {
-    if (!g_env) return nullptr;
-    file_log("load_helper_class: start path=%s", kHelperJarPath);
-    jclass loaderClass = find_class("dalvik/system/PathClassLoader");
-    if (!loaderClass) {
-        file_log("load_helper_class: PathClassLoader class missing");
+    if (!g_env || g_moduleDex.empty()) {
+        file_log("load_helper_class: no DEX bytes");
         return nullptr;
     }
 
-    jmethodID ctor = g_env->GetMethodID(loaderClass, "<init>", "(Ljava/lang/String;Ljava/lang/ClassLoader;)V");
-    if (!ctor || !jni_ok("PathClassLoader.<init>")) {
-        file_log("load_helper_class: PathClassLoader ctor missing");
-        g_env->DeleteLocalRef(loaderClass);
+    file_log("load_helper_class: start size=%lu", (unsigned long)g_moduleDex.size());
+
+    jclass dexClClass = find_class("dalvik/system/InMemoryDexClassLoader");
+    if (!dexClClass) {
+        file_log("load_helper_class: InMemoryDexClassLoader class missing");
+        return nullptr;
+    }
+
+    jmethodID dexClInit = g_env->GetMethodID(dexClClass, "<init>",
+        "(Ljava/nio/ByteBuffer;Ljava/lang/ClassLoader;)V");
+    if (!dexClInit || !jni_ok("InMemoryDexClassLoader.<init>")) {
+        file_log("load_helper_class: InMemoryDexClassLoader ctor missing");
+        g_env->DeleteLocalRef(dexClClass);
+        return nullptr;
+    }
+
+    jobject buf = g_env->NewDirectByteBuffer(g_moduleDex.data(), (jlong)g_moduleDex.size());
+    if (!buf || !jni_ok("NewDirectByteBuffer")) {
+        file_log("load_helper_class: NewDirectByteBuffer failed");
+        if (buf) g_env->DeleteLocalRef(buf);
+        g_env->DeleteLocalRef(dexClClass);
         return nullptr;
     }
 
@@ -250,10 +264,21 @@ static jclass load_helper_class() {
     jobject parent = getSystemClassLoader
         ? g_env->CallStaticObjectMethod(baseLoaderClass, getSystemClassLoader)
         : nullptr;
-    if (baseLoaderClass && !jni_ok("ClassLoader.getSystemClassLoader")) {
+    if (!parent || !jni_ok("ClassLoader.getSystemClassLoader")) {
         parent = nullptr;
     }
     file_log("load_helper_class: parent=%s", parent ? "ok" : "null");
+
+    jobject dexCl = g_env->NewObject(dexClClass, dexClInit, buf, parent);
+    if (!dexCl || !jni_ok("InMemoryDexClassLoader.new")) {
+        file_log("load_helper_class: InMemoryDexClassLoader.new failed");
+        if (dexCl) g_env->DeleteLocalRef(dexCl);
+        g_env->DeleteLocalRef(buf);
+        if (parent) g_env->DeleteLocalRef(parent);
+        if (baseLoaderClass) g_env->DeleteLocalRef(baseLoaderClass);
+        g_env->DeleteLocalRef(dexClClass);
+        return nullptr;
+    }
 
     jclass classClass = find_class("java/lang/Class");
     jmethodID forName = classClass
@@ -261,45 +286,34 @@ static jclass load_helper_class() {
         : nullptr;
     if (!forName) {
         file_log("load_helper_class: Class.forName unavailable");
+        g_env->DeleteLocalRef(dexCl);
+        g_env->DeleteLocalRef(buf);
         if (parent) g_env->DeleteLocalRef(parent);
         if (baseLoaderClass) g_env->DeleteLocalRef(baseLoaderClass);
+        g_env->DeleteLocalRef(dexClClass);
         if (classClass) g_env->DeleteLocalRef(classClass);
-        g_env->DeleteLocalRef(loaderClass);
-        return nullptr;
-    }
-
-    jstring path = g_env->NewStringUTF(kHelperJarPath);
-    jobject loader = path ? g_env->NewObject(loaderClass, ctor, path, parent) : nullptr;
-    if (!loader || !jni_ok("PathClassLoader.new")) {
-        file_log("load_helper_class: PathClassLoader.new failed");
-        if (path) g_env->DeleteLocalRef(path);
-        if (loader) g_env->DeleteLocalRef(loader);
-        if (parent) g_env->DeleteLocalRef(parent);
-        if (baseLoaderClass) g_env->DeleteLocalRef(baseLoaderClass);
-        g_env->DeleteLocalRef(classClass);
-        g_env->DeleteLocalRef(loaderClass);
         return nullptr;
     }
 
     jstring name = g_env->NewStringUTF(kHelperBinaryClassName);
     jclass helper = name
-        ? (jclass)g_env->CallStaticObjectMethod(classClass, forName, name, JNI_TRUE, loader)
+        ? (jclass)g_env->CallStaticObjectMethod(classClass, forName, name, JNI_TRUE, dexCl)
         : nullptr;
     bool loaded = jni_ok("Class.forName ClipSyncBridgeHelper");
     if (!helper || !loaded) {
         file_log("load_helper_class: Class.forName failed helper=%p loaded=%d", helper, loaded ? 1 : 0);
         helper = nullptr;
     } else {
-        file_log("load_helper_class: helper loaded");
+        file_log("load_helper_class: helper loaded via InMemoryDexClassLoader");
     }
 
     if (name) g_env->DeleteLocalRef(name);
-    g_env->DeleteLocalRef(loader);
+    g_env->DeleteLocalRef(dexCl);
+    g_env->DeleteLocalRef(buf);
     if (parent) g_env->DeleteLocalRef(parent);
     if (baseLoaderClass) g_env->DeleteLocalRef(baseLoaderClass);
-    g_env->DeleteLocalRef(path);
     g_env->DeleteLocalRef(classClass);
-    g_env->DeleteLocalRef(loaderClass);
+    g_env->DeleteLocalRef(dexClClass);
     return helper;
 }
 
@@ -331,7 +345,7 @@ static bool register_clipboard_listener(void) {
 
     jclass helper = load_helper_class();
     if (!helper) {
-        LOGE("clipboard listener helper not loaded from %s", kHelperJarPath);
+        LOGE("clipboard listener helper not loaded (InMemoryDexClassLoader)");
         file_log("register_clipboard_listener: helper not loaded");
         return false;
     }
