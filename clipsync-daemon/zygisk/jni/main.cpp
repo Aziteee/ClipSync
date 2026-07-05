@@ -38,9 +38,7 @@
 #define CLIPSYNC_BRIDGE_FILE_LOG 0
 #endif
 
-#if CLIPSYNC_BRIDGE_FILE_LOG
 #include <fcntl.h>
-#endif
 
 /* Abstract Unix socket: no filesystem path, no init/SELinux path labels.
  * sun_path[0] == '\0', actual name follows. */
@@ -177,8 +175,6 @@ static void notify_watchers(void) {
     }
     pthread_mutex_unlock(&g_watchers_mutex);
 }
-
-#include <fcntl.h>
 
 static void companion_handler(int fd) {
     int dex_fd = open(kModuleDexPath, O_RDONLY);
