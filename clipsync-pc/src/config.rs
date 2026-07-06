@@ -61,10 +61,10 @@ fn default_port() -> u16 {
     5287
 }
 fn default_heartbeat_interval_ms() -> u64 {
-    5_000
+    15_000
 }
 fn default_heartbeat_timeout_ms() -> u64 {
-    15_000
+    45_000
 }
 fn default_debounce_ms() -> u64 {
     300
@@ -147,8 +147,8 @@ mod tests {
         let cfg = ClipSyncConfig::default();
         assert_eq!(cfg.connection.port, 5287);
         assert_eq!(cfg.clipboard.debounce_ms, 300);
-        assert_eq!(cfg.connection.heartbeat_interval_ms, 5_000);
-        assert_eq!(cfg.connection.heartbeat_timeout_ms, 15_000);
+        assert_eq!(cfg.connection.heartbeat_interval_ms, 15_000);
+        assert_eq!(cfg.connection.heartbeat_timeout_ms, 45_000);
         assert!(cfg.auth.secret.is_empty());
         assert!(!cfg.general.start_with_windows);
     }
