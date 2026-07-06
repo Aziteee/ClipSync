@@ -3023,6 +3023,8 @@ size_t mg_dns_parse_rr(const uint8_t *buf, size_t len, size_t ofs,
 struct mg_connection *mg_mdns_listen(struct mg_mgr *mgr, mg_event_handler_t fn,
                                      void *fn_data);
 bool mg_mdns_query(struct mg_connection *, const char *, unsigned int);
+bool mg_mdns_announce(struct mg_connection *, struct mg_dnssd_record *,
+                      struct mg_str);
 
 
 

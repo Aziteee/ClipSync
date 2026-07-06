@@ -205,23 +205,34 @@ fn connected_device_count(devices: &[DeviceSummary]) -> usize {
 }
 
 fn device_menu_text(device: &DeviceSummary) -> String {
-    let name = device
+    let label = device
         .name
         .as_ref()
-        .map(|name| format!(" - {}", name))
-        .unwrap_or_default();
-    format!(
-        "[{}] {}{}",
-        device_state_text(device.state),
-        device.ip,
-        name
-    )
+        .map(|name| format!("{}  {}", name, device.ip))
+        .unwrap_or_else(|| device.ip.clone());
+    format!("{} {}", device_state_symbol(device.state), label)
 }
 
-fn device_state_text(state: DeviceSummaryState) -> &'static str {
+fn device_state_symbol(state: DeviceSummaryState) -> &'static str {
     match state {
-        DeviceSummaryState::Connected => "Connected",
-        DeviceSummaryState::Connecting => "Connecting",
-        DeviceSummaryState::Disconnected => "Disconnected",
+        DeviceSummaryState::Connected => "\u{25cf}",
+        DeviceSummaryState::Connecting => "\u{25cc}",
+        DeviceSummaryState::Disconnected => "\u{25cb}",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn device_menu_uses_symbol_and_short_name() {
+        let device = DeviceSummary {
+            name: Some("ABC123".to_string()),
+            ip: "192.168.0.157".to_string(),
+            state: DeviceSummaryState::Connected,
+        };
+
+        assert_eq!(device_menu_text(&device), "\u{25cf} ABC123  192.168.0.157");
     }
 }

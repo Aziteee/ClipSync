@@ -38,7 +38,6 @@ int main(void) {
     clipsync_config_init(&cfg);
     expect_int("default port", cfg.port, 5287);
     expect_str("default secret", cfg.secret, "");
-    expect_int("default debounce", cfg.debounce_ms, 300);
 
     if (clipsync_config_load_file(&cfg, "build/no-such-clipsync.toml") != 0) {
         fprintf(stderr, "missing config should keep defaults without failing\n");
@@ -52,10 +51,7 @@ int main(void) {
                "port = 6123\n"
                "\n"
                "[auth]\n"
-               "secret = \"phone secret\"\n"
-               "\n"
-               "[clipboard]\n"
-               "debounce_ms = 450\n");
+               "secret = \"phone secret\"\n");
 
     clipsync_config_init(&cfg);
     if (clipsync_config_load_file(&cfg, path) != 0) {
@@ -64,7 +60,6 @@ int main(void) {
     }
     expect_int("configured port", cfg.port, 6123);
     expect_str("configured secret", cfg.secret, "phone secret");
-    expect_int("configured debounce", cfg.debounce_ms, 450);
 
     char *argv[] = {
         "clipsyncd",
@@ -79,7 +74,6 @@ int main(void) {
     }
     expect_int("cli port overrides file", cfg.port, 7001);
     expect_str("cli secret overrides file", cfg.secret, "cli secret");
-    expect_int("config file still supplies debounce", cfg.debounce_ms, 450);
 
     remove(path);
     printf("daemon config tests passed\n");

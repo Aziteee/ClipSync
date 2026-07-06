@@ -12,8 +12,17 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <pthread.h>
+#include <stdatomic.h>
 
 #define SOCK_ABSTRACT_NAME "clipbridge"
+
+static atomic_int g_watch_running = 0;
+static atomic_int g_watch_changed = 0;
+static atomic_int g_watch_fd = -1;
+static pthread_t g_watch_thread;
+static void (*g_watch_notify_fn)(void *) = NULL;
+static void *g_watch_notify_arg = NULL;
 
 static int sock_connect(void) {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -101,4 +110,93 @@ int clip_bridge_set_text(const char *text) {
     close(fd);
     ok = (strncmp(line, "OK", 2) == 0) ? 0 : -1;
     return ok;
+}
+
+static void *watch_thread_main(void *arg) {
+    (void)arg;
+    while (atomic_load(&g_watch_running)) {
+        int fd = sock_connect();
+        char line[256];
+        if (fd < 0) {
+            sleep(1);
+            continue;
+        }
+        atomic_store(&g_watch_fd, fd);
+
+        if (bridge_write_cstr(fd, "WATCH\n") != 0) {
+            close(fd);
+            atomic_store(&g_watch_fd, -1);
+            sleep(1);
+            continue;
+        }
+
+        if (bridge_read_line(fd, line, sizeof(line)) != 0 ||
+            bridge_parse_watch_line(line) != CLIPSYNC_WATCH_LINE_READY) {
+            if (strncmp(line, "ERR ", 4) == 0) {
+                fprintf(stderr, "[clip_bridge] WATCH unavailable: %s", line);
+            }
+            close(fd);
+            atomic_store(&g_watch_fd, -1);
+            sleep(1);
+            continue;
+        }
+
+        printf("[clip_bridge] WATCH ready\n");
+
+        while (atomic_load(&g_watch_running)) {
+            clipsync_watch_line kind;
+            if (bridge_read_line(fd, line, sizeof(line)) != 0) {
+                break;
+            }
+            kind = bridge_parse_watch_line(line);
+            if (kind == CLIPSYNC_WATCH_LINE_CHANGED) {
+                atomic_store(&g_watch_changed, 1);
+                if (g_watch_notify_fn) {
+                    g_watch_notify_fn(g_watch_notify_arg);
+                }
+            } else if (kind != CLIPSYNC_WATCH_LINE_READY) {
+                fprintf(stderr, "[clip_bridge] WATCH unknown line: %s", line);
+            }
+        }
+
+        close(fd);
+        atomic_store(&g_watch_fd, -1);
+        if (atomic_load(&g_watch_running)) {
+            sleep(1);
+        }
+    }
+    return NULL;
+}
+
+int clip_bridge_watch_start(void (*notify_fn)(void *), void *notify_arg) {
+    int expected = 0;
+    if (!atomic_compare_exchange_strong(&g_watch_running, &expected, 1)) {
+        return 0;
+    }
+    g_watch_notify_fn = notify_fn;
+    g_watch_notify_arg = notify_arg;
+    atomic_store(&g_watch_changed, 0);
+    if (pthread_create(&g_watch_thread, NULL, watch_thread_main, NULL) != 0) {
+        atomic_store(&g_watch_running, 0);
+        g_watch_notify_fn = NULL;
+        g_watch_notify_arg = NULL;
+        return -1;
+    }
+    return 0;
+}
+
+void clip_bridge_watch_stop(void) {
+    int fd;
+    if (!atomic_exchange(&g_watch_running, 0)) return;
+    fd = atomic_load(&g_watch_fd);
+    if (fd >= 0) {
+        shutdown(fd, SHUT_RDWR);
+    }
+    pthread_join(g_watch_thread, NULL);
+    g_watch_notify_fn = NULL;
+    g_watch_notify_arg = NULL;
+}
+
+int clip_bridge_watch_take_changed(void) {
+    return atomic_exchange(&g_watch_changed, 0);
 }

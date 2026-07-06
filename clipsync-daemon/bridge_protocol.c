@@ -37,7 +37,6 @@ int bridge_read_full(int fd, void *buf, size_t len) {
             if (errno == EINTR) continue;
             return -1;
         }
-        if (n == 0) return -1;
         done += (size_t)n;
     }
     return 0;
@@ -83,4 +82,11 @@ int bridge_parse_len_header(const char *line, const char *prefix, size_t *out_le
     if (*p != '\n' || parsed > CLIPSYNC_BRIDGE_MAX_PAYLOAD) return -1;
     *out_len = (size_t)parsed;
     return 0;
+}
+
+clipsync_watch_line bridge_parse_watch_line(const char *line) {
+    if (!line) return CLIPSYNC_WATCH_LINE_UNKNOWN;
+    if (strcmp(line, "READY\n") == 0) return CLIPSYNC_WATCH_LINE_READY;
+    if (strcmp(line, "CHANGED\n") == 0) return CLIPSYNC_WATCH_LINE_CHANGED;
+    return CLIPSYNC_WATCH_LINE_UNKNOWN;
 }

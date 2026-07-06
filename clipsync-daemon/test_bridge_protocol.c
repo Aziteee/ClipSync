@@ -117,11 +117,19 @@ static void test_incomplete_body(void) {
     close(fds[0]);
 }
 
+static void test_watch_lines(void) {
+    expect_int("watch ready", bridge_parse_watch_line("READY\n"), CLIPSYNC_WATCH_LINE_READY);
+    expect_int("watch changed", bridge_parse_watch_line("CHANGED\n"), CLIPSYNC_WATCH_LINE_CHANGED);
+    expect_int("watch unknown", bridge_parse_watch_line("NOPE\n"), CLIPSYNC_WATCH_LINE_UNKNOWN);
+    expect_int("watch null", bridge_parse_watch_line(NULL), CLIPSYNC_WATCH_LINE_UNKNOWN);
+}
+
 int main(void) {
     test_parse_headers();
     test_multiline_body();
     test_large_body();
     test_incomplete_body();
+    test_watch_lines();
     printf("bridge protocol tests passed\n");
     return 0;
 }

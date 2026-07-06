@@ -5,7 +5,6 @@
 
 typedef struct {
     int port;
-    int debounce_ms;
     char secret[256];
     char config_path[256];
     int config_loaded;

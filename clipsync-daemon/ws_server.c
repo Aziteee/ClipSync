@@ -25,6 +25,7 @@ static ws_client g_clients[MAX_CLIENTS];
 static char g_secret[256];
 static ws_on_set_fn g_on_set = NULL;
 static int g_initialized = 0;
+static int g_wakeup_enabled = 0;
 
 static ws_client *client_find(struct mg_connection *c);
 static ws_client *client_alloc(struct mg_connection *c);
@@ -150,6 +151,10 @@ static void handle_authed_message(struct mg_connection *c, const char *json, siz
 }
 
 static void ws_event_handler(struct mg_connection *c, int ev, void *ev_data) {
+    if (ev == MG_EV_WAKEUP) {
+        return;
+    }
+
     if (ev == MG_EV_HTTP_MSG) {
         struct mg_http_message *hm = (struct mg_http_message *) ev_data;
         if (mg_match(hm->uri, mg_str("/"), NULL) || mg_match(hm->uri, mg_str("/ws"), NULL)) {
@@ -203,6 +208,13 @@ int ws_server_init(int port, const char *secret) {
     }
 
     mg_mgr_init(&g_mgr);
+    if (mg_wakeup_init(&g_mgr)) {
+        g_wakeup_enabled = 1;
+    } else {
+        g_wakeup_enabled = 0;
+        fprintf(stderr, "[ws_server] mg_wakeup_init failed; clipboard wakeups may wait for poll timeout\n");
+    }
+
     snprintf(listen_url, sizeof(listen_url), "http://0.0.0.0:%d", port);
     g_listener = mg_http_listen(&g_mgr, listen_url, ws_event_handler, NULL);
     if (!g_listener) {
@@ -227,6 +239,7 @@ void ws_server_cleanup(void) {
     if (!g_initialized) return;
     mg_mgr_free(&g_mgr);
     g_listener = NULL;
+    g_wakeup_enabled = 0;
     memset(g_clients, 0, sizeof(g_clients));
     memset(g_secret, 0, sizeof(g_secret));
     g_on_set = NULL;
@@ -245,6 +258,35 @@ void ws_server_broadcast(const char *json) {
 
 void ws_server_set_on_set(ws_on_set_fn fn) {
     g_on_set = fn;
+}
+
+void ws_server_wakeup(void) {
+    if (g_initialized && g_wakeup_enabled && g_listener) {
+        (void)mg_wakeup(&g_mgr, g_listener->id, "clip", 4);
+    }
+}
+
+int ws_server_next_timeout_ms(int max_idle_ms) {
+    unsigned long long now;
+    int timeout = max_idle_ms < 0 ? 0 : max_idle_ms;
+
+    if (!g_initialized) return timeout;
+
+    now = mg_millis();
+    for (size_t i = 0; i < MAX_CLIENTS; i++) {
+        if (g_clients[i].conn && !g_clients[i].authenticated &&
+            g_clients[i].auth_deadline_ms != 0) {
+            unsigned long long remaining;
+            if (now >= g_clients[i].auth_deadline_ms) {
+                return 0;
+            }
+            remaining = g_clients[i].auth_deadline_ms - now;
+            if (remaining < (unsigned long long)timeout) {
+                timeout = (int)remaining;
+            }
+        }
+    }
+    return timeout;
 }
 
 struct mg_mgr *ws_server_mgr(void) {
