@@ -33,6 +33,7 @@ pub(crate) enum UiEvent {
 type DeviceId = String;
 
 const PC_ORIGIN: &str = "pc";
+const DISCOVERED_DEVICE_MAX_RETRIES: u32 = 3;
 static EVENT_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,9 +93,10 @@ struct DeviceHandle {
     last_error: Option<String>,
 }
 
-fn should_retry_failed_endpoint(origin: DeviceOrigin) -> bool {
+fn should_retry_failed_endpoint(origin: DeviceOrigin, completed_retries: u32) -> bool {
     match origin {
-        DeviceOrigin::Static | DeviceOrigin::Discovered => true,
+        DeviceOrigin::Static => true,
+        DeviceOrigin::Discovered => completed_retries < DISCOVERED_DEVICE_MAX_RETRIES,
     }
 }
 
@@ -528,6 +530,7 @@ async fn run_device_task(
     let heartbeat_timeout = Duration::from_millis(cfg.connection.heartbeat_timeout_ms);
     let mut backoff_secs = 1u64;
     let max_backoff = 60u64;
+    let mut completed_retries = 0u32;
 
     loop {
         let _ = event_tx.send(DeviceEvent::StateChanged {
@@ -539,6 +542,7 @@ async fn run_device_task(
         log::info!("Connecting to {} ({})...", target.name, target.uri);
         match ws::connect_and_auth(&target.uri, &cfg.auth.secret, handshake_timeout(&cfg)).await {
             Ok(mut ws) => {
+                completed_retries = 0;
                 backoff_secs = 1;
                 log::info!(
                     "Connected and authenticated: {} ({})",
@@ -577,7 +581,13 @@ async fn run_device_task(
             }
         }
 
-        if !should_retry_failed_endpoint(target.origin) {
+        if !should_retry_failed_endpoint(target.origin, completed_retries) {
+            log::info!(
+                "Giving up on discovered device {} ({}) after {} retries",
+                target.name,
+                target.uri,
+                completed_retries
+            );
             let _ = event_tx.send(DeviceEvent::Finished {
                 id: target.id.clone(),
             });
@@ -585,6 +595,7 @@ async fn run_device_task(
         }
 
         let retry_after = backoff_secs;
+        completed_retries = completed_retries.saturating_add(1);
         backoff_secs = (backoff_secs * 2).min(max_backoff);
         let mut retry_sleep = Box::pin(tokio::time::sleep(Duration::from_secs(retry_after)));
         loop {
@@ -961,9 +972,11 @@ mod tests {
     }
 
     #[test]
-    fn discovered_endpoints_are_retried_after_transient_disconnects() {
-        assert!(should_retry_failed_endpoint(DeviceOrigin::Static));
-        assert!(should_retry_failed_endpoint(DeviceOrigin::Discovered));
+    fn discovered_endpoints_have_a_bounded_retry_budget() {
+        assert!(should_retry_failed_endpoint(DeviceOrigin::Static, u32::MAX));
+        assert!(should_retry_failed_endpoint(DeviceOrigin::Discovered, 0));
+        assert!(should_retry_failed_endpoint(DeviceOrigin::Discovered, 2));
+        assert!(!should_retry_failed_endpoint(DeviceOrigin::Discovered, 3));
     }
 
     #[test]
