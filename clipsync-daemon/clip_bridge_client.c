@@ -244,7 +244,7 @@ int clip_bridge_post_notification(int notif_id, const char *title, const char *t
 
     for (i = 0; i < num_actions; i++) {
         size_t llen = labels[i] ? strlen(labels[i]) : 0;
-        if (llen > CLIPSYNC_BRIDGE_MAX_PAYLOAD) { close(fd); return -1; }
+        if (llen > CLIPSYNC_BRIDGE_MAX_ACTION_LABEL) { close(fd); return -1; }
         snprintf(header, sizeof(header), "%lu %d\n", (unsigned long)llen, action_ids[i]);
         if (bridge_write_cstr(fd, header) != 0) { close(fd); return -1; }
         if (llen > 0 && bridge_write_full(fd, labels[i], llen) != 0) { close(fd); return -1; }

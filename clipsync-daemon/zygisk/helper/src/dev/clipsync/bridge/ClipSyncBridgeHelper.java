@@ -15,12 +15,19 @@ import android.os.Build;
 import android.provider.Settings;
 import android.util.Log;
 
+import java.security.SecureRandom;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
 public final class ClipSyncBridgeHelper {
     private static final String TAG = "ClipSyncBridge";
+    private static final String ACTION_NOTIFICATION = "dev.clipsync.NOTIF_ACTION";
+    private static final String EXTRA_ACTION_ID = "action_id";
+    private static final String EXTRA_NOTIF_ID = "notif_id";
+    private static final String EXTRA_TOKEN = "token";
+    private static final int RECEIVER_NOT_EXPORTED_FLAG = 0x4;
+    private static final long sActionToken = makeActionToken();
     private static volatile boolean sReceiverRegistered = false;
 
     private ClipSyncBridgeHelper() {}
@@ -39,13 +46,27 @@ public final class ClipSyncBridgeHelper {
 
     /* --- Notification action support --- */
 
-    /* Build a PendingIntent that, when triggered, broadcasts an implicit intent
-     * carrying the actionId as an extra. */
-    public static PendingIntent buildActionPendingIntent(Context context, int actionId) {
-        Intent intent = new Intent("dev.clipsync.NOTIF_ACTION")
-                .putExtra("action_id", actionId);
-        return PendingIntent.getBroadcast(context, actionId, intent,
-                PendingIntent.FLAG_IMMUTABLE);
+    private static long makeActionToken() {
+        long token = new SecureRandom().nextLong();
+        return token != 0 ? token : 1L;
+    }
+
+    /* Build a PendingIntent that, when triggered, broadcasts only to this package
+     * and carries a process-local token that external broadcasts cannot know. */
+    public static PendingIntent buildActionPendingIntent(Context context,
+            int notifId, int actionIndex, int actionId) {
+        String packageName = context.getPackageName();
+        if (packageName == null || packageName.length() == 0) {
+            packageName = "android";
+        }
+        Intent intent = new Intent(ACTION_NOTIFICATION)
+                .setPackage(packageName)
+                .putExtra(EXTRA_ACTION_ID, actionId)
+                .putExtra(EXTRA_NOTIF_ID, notifId)
+                .putExtra(EXTRA_TOKEN, sActionToken);
+        int requestCode = 0x43530000 ^ (notifId * 31) ^ (actionIndex * 131) ^ actionId;
+        return PendingIntent.getBroadcast(context, requestCode, intent,
+                PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
     }
 
     /* Register the receiver that listens for ALL notification action broadcasts.
@@ -56,9 +77,13 @@ public final class ClipSyncBridgeHelper {
         if (sReceiverRegistered) return true;
         if (context == null) return false;
         try {
-            IntentFilter filter = new IntentFilter("dev.clipsync.NOTIF_ACTION");
-            context.registerReceiver(new NotificationActionReceiver(), filter,
-                    Context.RECEIVER_EXPORTED);
+            IntentFilter filter = new IntentFilter(ACTION_NOTIFICATION);
+            if (Build.VERSION.SDK_INT >= 33) {
+                context.registerReceiver(new NotificationActionReceiver(), filter,
+                        RECEIVER_NOT_EXPORTED_FLAG);
+            } else {
+                context.registerReceiver(new NotificationActionReceiver(), filter);
+            }
             sReceiverRegistered = true;
             Log.i(TAG, "notification action receiver registered");
             return true;
@@ -75,11 +100,12 @@ public final class ClipSyncBridgeHelper {
      * @param actionLabels  button labels, length == actionIds.length (may be null)
      * @param actionIds     action IDs returned in callback when button tapped (may be null)
      */
-    public static void postNotification(Context context, int notifId,
+    public static boolean postNotification(Context context, int notifId,
             String title, String text, String[] actionLabels, int[] actionIds) {
-        registerActionReceiver(context);
+        if (context == null) return false;
 
         NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm == null) return false;
 
         if (Build.VERSION.SDK_INT >= 26) {
             NotificationChannel channel = new NotificationChannel(
@@ -102,7 +128,11 @@ public final class ClipSyncBridgeHelper {
             int n = Math.min(actionLabels.length, actionIds.length);
             for (int i = 0; i < n && i < 10; i++) {
                 if (actionLabels[i] == null) continue;
-                PendingIntent pi = buildActionPendingIntent(context, actionIds[i]);
+                if (btnCount == 0 && !registerActionReceiver(context)) {
+                    Log.e(TAG, "notification action receiver unavailable");
+                    return false;
+                }
+                PendingIntent pi = buildActionPendingIntent(context, notifId, i, actionIds[i]);
                 if (pi != null) {
                     Notification.Action action = new Notification.Action.Builder(
                             0, actionLabels[i], pi).build();
@@ -115,6 +145,7 @@ public final class ClipSyncBridgeHelper {
         nm.notify(notifId, builder.build());
         Log.i(TAG, "notification posted: id=" + notifId
                 + " title=\"" + safeTitle + "\" actions=" + btnCount);
+        return true;
     }
 
     /* ------ original clipboard listener code (unchanged) ------ */
@@ -122,7 +153,15 @@ public final class ClipSyncBridgeHelper {
     static final class NotificationActionReceiver extends BroadcastReceiver {
         @Override
         public void onReceive(Context context, Intent intent) {
-            int actionId = intent.getIntExtra("action_id", -1);
+            if (intent == null || !ACTION_NOTIFICATION.equals(intent.getAction())) {
+                return;
+            }
+            long token = intent.getLongExtra(EXTRA_TOKEN, 0L);
+            if (token != sActionToken) {
+                Log.e(TAG, "rejecting notification action with invalid token");
+                return;
+            }
+            int actionId = intent.getIntExtra(EXTRA_ACTION_ID, -1);
             Log.i(TAG, "NotificationActionReceiver.onReceive action=" + intent.getAction()
                     + " action_id=" + actionId);
             if (actionId >= 0) {

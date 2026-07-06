@@ -91,6 +91,12 @@ int main(int argc, char **argv) {
             char *end;
             int action_id = (int)strtol(argv[5 + i * 2], &end, 10);
             size_t llen = strlen(label);
+            if (llen > CLIPSYNC_BRIDGE_MAX_ACTION_LABEL) {
+                fprintf(stderr, "button label too long: %lu > %u\n",
+                        (unsigned long)llen, CLIPSYNC_BRIDGE_MAX_ACTION_LABEL);
+                close(fd);
+                return 1;
+            }
             snprintf(header, sizeof(header), "%lu %d\n", (unsigned long)llen, action_id);
             if (bridge_write_cstr(fd, header) != 0 ||
                 bridge_write_full(fd, label, llen) != 0) {

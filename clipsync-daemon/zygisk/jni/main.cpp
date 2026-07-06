@@ -21,6 +21,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cerrno>
+#include <climits>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/types.h>
@@ -732,9 +733,27 @@ static jobject get_system_context(void) {
     if (!g_env) return nullptr;
     jclass atClass = find_class("android/app/ActivityThread");
     if (!atClass) return nullptr;
-    jmethodID curApp = get_static_method(atClass, "currentApplication", "()Landroid/app/Application;");
-    jobject ctx = curApp ? g_env->CallStaticObjectMethod(atClass, curApp) : nullptr;
-    if (!jni_ok("ActivityThread.currentApplication")) ctx = nullptr;
+
+    jobject ctx = nullptr;
+    jmethodID curThread = get_static_method(atClass, "currentActivityThread", "()Landroid/app/ActivityThread;");
+    if (curThread) {
+        jobject thread = g_env->CallStaticObjectMethod(atClass, curThread);
+        if (jni_ok("ActivityThread.currentActivityThread") && thread) {
+            jmethodID sysContext = get_method(atClass, "getSystemContext", "()Landroid/app/ContextImpl;");
+            if (sysContext) {
+                ctx = g_env->CallObjectMethod(thread, sysContext);
+                if (!jni_ok("ActivityThread.getSystemContext")) ctx = nullptr;
+            }
+            g_env->DeleteLocalRef(thread);
+        }
+    }
+
+    if (!ctx) {
+        jmethodID curApp = get_static_method(atClass, "currentApplication", "()Landroid/app/Application;");
+        ctx = curApp ? g_env->CallStaticObjectMethod(atClass, curApp) : nullptr;
+        if (!jni_ok("ActivityThread.currentApplication")) ctx = nullptr;
+    }
+
     g_env->DeleteLocalRef(atClass);
     return ctx;
 }
@@ -747,6 +766,8 @@ static void write_err(int fd, const char *reason);
 static void handle_notify_body(int fd, unsigned long notif_id,
         unsigned long title_len, unsigned long text_len, unsigned long num_actions) {
     char *title = nullptr, *text_str = nullptr;
+    char *labels[10] = {};
+    jint ids[10] = {};
     jstring jtitle = nullptr, jtext = nullptr;
     jobjectArray jlabels = nullptr;
     jintArray jactionIds = nullptr;
@@ -778,50 +799,74 @@ static void handle_notify_body(int fd, unsigned long notif_id,
 
     /* Read actions */
     if (num_actions > 0) {
-        static char label_buf[128];
-        static int ids[10];
-        static char *labels[10];
-        memset(labels, 0, sizeof(labels));
-
         for (unsigned long i = 0; i < num_actions; i++) {
             unsigned long label_len = 0;
             unsigned long action_id = 0;
             char act_header[64];
             if (bridge_read_line(fd, act_header, sizeof(act_header)) != 0 ||
                 sscanf(act_header, "%lu %lu", &label_len, &action_id) != 2 ||
-                label_len >= sizeof(label_buf)) {
+                label_len > CLIPSYNC_BRIDGE_MAX_ACTION_LABEL ||
+                action_id > INT_MAX) {
                 write_err(fd, "bad_action"); goto cleanup;
             }
-            label_buf[0] = '\0';
-            if (label_len > 0 && bridge_read_full(fd, label_buf, label_len) != 0) {
+            labels[i] = (char *)malloc(label_len + 1);
+            if (!labels[i]) {
+                write_err(fd, "oom"); goto cleanup;
+            }
+            if (label_len > 0 && bridge_read_full(fd, labels[i], label_len) != 0) {
                 write_err(fd, "bad_action_label"); goto cleanup;
             }
-            label_buf[label_len] = '\0';
-            ids[i] = (int)action_id;
-            labels[i] = strdup(label_buf);
+            labels[i][label_len] = '\0';
+            ids[i] = (jint)action_id;
         }
 
         /* Build Java arrays */
         jclass stringClass = find_class("java/lang/String");
-        if (stringClass) {
-            jlabels = g_env->NewObjectArray((jsize)num_actions, stringClass, nullptr);
-            if (jlabels && jni_ok("NewObjectArray labels")) {
-                for (unsigned long i = 0; i < num_actions; i++) {
-                    jstring js = g_env->NewStringUTF(labels[i] ? labels[i] : "");
-                    if (js && jni_ok("NewStringUTF label")) {
-                        g_env->SetObjectArrayElement(jlabels, (jsize)i, js);
-                    }
-                    if (js) g_env->DeleteLocalRef(js);
-                }
-            }
+        if (!stringClass) {
+            write_err(fd, "no_string_class"); goto cleanup;
+        }
+        jlabels = g_env->NewObjectArray((jsize)num_actions, stringClass, nullptr);
+        if (!jni_ok("NewObjectArray labels") || !jlabels) {
             g_env->DeleteLocalRef(stringClass);
+            write_err(fd, "oom_labels"); goto cleanup;
         }
-        jactionIds = g_env->NewIntArray((jsize)num_actions);
-        if (jactionIds && jni_ok("NewIntArray actionIds")) {
-            g_env->SetIntArrayRegion(jactionIds, 0, (jsize)num_actions, ids);
+        for (unsigned long i = 0; i < num_actions; i++) {
+            jstring js = g_env->NewStringUTF(labels[i] ? labels[i] : "");
+            if (!jni_ok("NewStringUTF label") || !js) {
+                if (js) g_env->DeleteLocalRef(js);
+                g_env->DeleteLocalRef(stringClass);
+                write_err(fd, "bad_action_label"); goto cleanup;
+            }
+            g_env->SetObjectArrayElement(jlabels, (jsize)i, js);
+            g_env->DeleteLocalRef(js);
+            if (!jni_ok("SetObjectArrayElement label")) {
+                g_env->DeleteLocalRef(stringClass);
+                write_err(fd, "bad_action_label"); goto cleanup;
+            }
         }
+        g_env->DeleteLocalRef(stringClass);
 
-        for (unsigned long i = 0; i < num_actions; i++) free(labels[i]);
+        jactionIds = g_env->NewIntArray((jsize)num_actions);
+        if (!jni_ok("NewIntArray actionIds") || !jactionIds) {
+            write_err(fd, "oom_action_ids"); goto cleanup;
+        }
+        g_env->SetIntArrayRegion(jactionIds, 0, (jsize)num_actions, ids);
+        if (!jni_ok("SetIntArrayRegion actionIds")) {
+            write_err(fd, "bad_action_ids"); goto cleanup;
+        }
+    }
+
+    if (title) {
+        jtitle = g_env->NewStringUTF(title);
+        if (!jni_ok("NewStringUTF title") || !jtitle) {
+            write_err(fd, "bad_title_utf"); goto cleanup;
+        }
+    }
+    if (text_str) {
+        jtext = g_env->NewStringUTF(text_str);
+        if (!jni_ok("NewStringUTF text") || !jtext) {
+            write_err(fd, "bad_text_utf"); goto cleanup;
+        }
     }
 
     /* Call helper.postNotification(ctx, notifId, title, text, labels, actionIds) */
@@ -831,17 +876,19 @@ static void handle_notify_body(int fd, unsigned long notif_id,
 
         jclass helper = load_helper_class();
         if (!helper) { write_err(fd, "no_helper"); g_env->DeleteLocalRef(ctx); goto cleanup; }
-        register_native_callback(helper);
-
-        if (title) jtitle = g_env->NewStringUTF(title);
-        if (text_str) jtext = g_env->NewStringUTF(text_str);
+        if (!register_native_callback(helper)) {
+            write_err(fd, "callback_failed");
+            g_env->DeleteLocalRef(helper);
+            g_env->DeleteLocalRef(ctx);
+            goto cleanup;
+        }
 
         jmethodID post = get_static_method(helper, "postNotification",
-            "(Landroid/content/Context;ILjava/lang/String;Ljava/lang/String;[Ljava/lang/String;[I)V");
+            "(Landroid/content/Context;ILjava/lang/String;Ljava/lang/String;[Ljava/lang/String;[I)Z");
         if (post) {
-            g_env->CallStaticVoidMethod(helper, post, ctx, (jint)notif_id,
-                jtitle, jtext, jlabels, jactionIds);
-            ok = jni_ok("postNotification");
+            ok = g_env->CallStaticBooleanMethod(helper, post, ctx, (jint)notif_id,
+                jtitle, jtext, jlabels, jactionIds) == JNI_TRUE;
+            if (!jni_ok("postNotification")) ok = false;
         }
         if (ok) {
             bridge_write_cstr(fd, "OK\n");
@@ -849,15 +896,18 @@ static void handle_notify_body(int fd, unsigned long notif_id,
             write_err(fd, "notify_failed");
         }
 
-        if (jtitle) g_env->DeleteLocalRef(jtitle);
-        if (jtext) g_env->DeleteLocalRef(jtext);
         g_env->DeleteLocalRef(helper);
         g_env->DeleteLocalRef(ctx);
     }
 
 cleanup:
+    for (unsigned long i = 0; i < num_actions && i < 10; i++) {
+        free(labels[i]);
+    }
     free(title);
     free(text_str);
+    if (jtitle) g_env->DeleteLocalRef(jtitle);
+    if (jtext) g_env->DeleteLocalRef(jtext);
     if (jlabels) g_env->DeleteLocalRef(jlabels);
     if (jactionIds) g_env->DeleteLocalRef(jactionIds);
 }

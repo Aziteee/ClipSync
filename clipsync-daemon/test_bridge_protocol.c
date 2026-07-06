@@ -118,10 +118,22 @@ static void test_incomplete_body(void) {
 }
 
 static void test_watch_lines(void) {
+    int action_id = -1;
     expect_int("watch ready", bridge_parse_watch_line("READY\n"), CLIPSYNC_WATCH_LINE_READY);
     expect_int("watch changed", bridge_parse_watch_line("CHANGED\n"), CLIPSYNC_WATCH_LINE_CHANGED);
+    expect_int("watch action", bridge_parse_watch_line("ACTION 1\n"), CLIPSYNC_WATCH_LINE_ACTION);
     expect_int("watch unknown", bridge_parse_watch_line("NOPE\n"), CLIPSYNC_WATCH_LINE_UNKNOWN);
     expect_int("watch null", bridge_parse_watch_line(NULL), CLIPSYNC_WATCH_LINE_UNKNOWN);
+
+    expect_int("parse action", bridge_parse_action_line("ACTION 42\n", &action_id), 0);
+    expect_int("action id", action_id, 42);
+    expect_int("parse action zero", bridge_parse_action_line("ACTION 0\n", &action_id), 0);
+    expect_int("action id zero", action_id, 0);
+    expect_int("reject action null", bridge_parse_action_line(NULL, &action_id), -1);
+    expect_int("reject action null out", bridge_parse_action_line("ACTION 1\n", NULL), -1);
+    expect_int("reject action negative", bridge_parse_action_line("ACTION -1\n", &action_id), -1);
+    expect_int("reject action garbage", bridge_parse_action_line("ACTION 1 nope\n", &action_id), -1);
+    expect_int("reject action overflow", bridge_parse_action_line("ACTION 2147483648\n", &action_id), -1);
 }
 
 int main(void) {

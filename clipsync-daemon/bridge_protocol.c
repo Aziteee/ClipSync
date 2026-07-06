@@ -1,6 +1,7 @@
 #include "bridge_protocol.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -100,7 +101,9 @@ int bridge_parse_action_line(const char *line, int *out_action_id) {
     p = line + 7;
     if (*p < '0' || *p > '9') return -1;
     while (*p >= '0' && *p <= '9') {
-        value = value * 10 + (*p - '0');
+        int digit = *p - '0';
+        if (value > (INT_MAX - digit) / 10) return -1;
+        value = value * 10 + digit;
         p++;
     }
     if (*p != '\n') return -1;

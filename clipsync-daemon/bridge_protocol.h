@@ -8,6 +8,7 @@ extern "C" {
 #endif
 
 #define CLIPSYNC_BRIDGE_MAX_PAYLOAD 262144U
+#define CLIPSYNC_BRIDGE_MAX_ACTION_LABEL 128U
 
 typedef enum {
     CLIPSYNC_WATCH_LINE_UNKNOWN = 0,
