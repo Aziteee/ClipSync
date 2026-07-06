@@ -88,5 +88,22 @@ clipsync_watch_line bridge_parse_watch_line(const char *line) {
     if (!line) return CLIPSYNC_WATCH_LINE_UNKNOWN;
     if (strcmp(line, "READY\n") == 0) return CLIPSYNC_WATCH_LINE_READY;
     if (strcmp(line, "CHANGED\n") == 0) return CLIPSYNC_WATCH_LINE_CHANGED;
+    if (strncmp(line, "ACTION ", 7) == 0) return CLIPSYNC_WATCH_LINE_ACTION;
     return CLIPSYNC_WATCH_LINE_UNKNOWN;
+}
+
+int bridge_parse_action_line(const char *line, int *out_action_id) {
+    const char *p;
+    int value = 0;
+    if (!line || !out_action_id) return -1;
+    if (strncmp(line, "ACTION ", 7) != 0) return -1;
+    p = line + 7;
+    if (*p < '0' || *p > '9') return -1;
+    while (*p >= '0' && *p <= '9') {
+        value = value * 10 + (*p - '0');
+        p++;
+    }
+    if (*p != '\n') return -1;
+    *out_action_id = value;
+    return 0;
 }

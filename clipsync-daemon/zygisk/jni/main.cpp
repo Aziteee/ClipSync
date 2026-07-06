@@ -86,9 +86,15 @@ static bool jni_ok(const char *ctx) {
 }
 
 static jclass find_class(const char *name) {
-    jclass cls = g_env ? g_env->FindClass(name) : nullptr;
-    if (!cls || !jni_ok(name)) {
+    if (!g_env) return nullptr;
+    jclass cls = g_env->FindClass(name);
+    if (!cls) {
+        jni_clear_exception(name);
         LOGE("FindClass failed: %s", name);
+        return nullptr;
+    }
+    if (!jni_ok(name)) {
+        LOGE("FindClass exception: %s", name);
         return nullptr;
     }
     return cls;
@@ -97,8 +103,13 @@ static jclass find_class(const char *name) {
 static jmethodID get_method(jclass cls, const char *name, const char *sig) {
     if (!cls) return nullptr;
     jmethodID method = g_env->GetMethodID(cls, name, sig);
-    if (!method || !jni_ok(name)) {
+    if (!method) {
+        jni_clear_exception(name);
         LOGE("GetMethodID failed: %s %s", name, sig);
+        return nullptr;
+    }
+    if (!jni_ok(name)) {
+        LOGE("GetMethodID exception: %s %s", name, sig);
         return nullptr;
     }
     return method;
@@ -107,8 +118,13 @@ static jmethodID get_method(jclass cls, const char *name, const char *sig) {
 static jmethodID get_static_method(jclass cls, const char *name, const char *sig) {
     if (!cls) return nullptr;
     jmethodID method = g_env->GetStaticMethodID(cls, name, sig);
-    if (!method || !jni_ok(name)) {
+    if (!method) {
+        jni_clear_exception(name);
         LOGE("GetStaticMethodID failed: %s %s", name, sig);
+        return nullptr;
+    }
+    if (!jni_ok(name)) {
+        LOGE("GetStaticMethodID exception: %s %s", name, sig);
         return nullptr;
     }
     return method;
@@ -117,8 +133,13 @@ static jmethodID get_static_method(jclass cls, const char *name, const char *sig
 static jfieldID get_field(jclass cls, const char *name, const char *sig) {
     if (!cls) return nullptr;
     jfieldID field = g_env->GetFieldID(cls, name, sig);
-    if (!field || !jni_ok(name)) {
+    if (!field) {
+        jni_clear_exception(name);
         LOGE("GetFieldID failed: %s %s", name, sig);
+        return nullptr;
+    }
+    if (!jni_ok(name)) {
+        LOGE("GetFieldID exception: %s %s", name, sig);
         return nullptr;
     }
     return field;
@@ -138,6 +159,26 @@ static void notify_watchers(void) {
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
             ++it;
         } else if (n < 0 || n != 8) {
+            close(fd);
+            it = g_watchers.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    pthread_mutex_unlock(&g_watchers_mutex);
+}
+
+static void notify_action_watchers(int action_id) {
+    char msg[32];
+    int len = snprintf(msg, sizeof(msg), "ACTION %d\n", action_id);
+    if (len <= 0 || len >= (int)sizeof(msg)) return;
+    pthread_mutex_lock(&g_watchers_mutex);
+    for (auto it = g_watchers.begin(); it != g_watchers.end();) {
+        int fd = *it;
+        ssize_t n = send(fd, msg, (size_t)len, MSG_DONTWAIT | MSG_NOSIGNAL);
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+            ++it;
+        } else if (n < 0 || n != len) {
             close(fd);
             it = g_watchers.erase(it);
         } else {
@@ -199,10 +240,16 @@ Java_dev_clipsync_bridge_ClipSyncBridgeHelper_nativeOnClipboardChanged(JNIEnv *,
     notify_watchers();
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_dev_clipsync_bridge_ClipSyncBridgeHelper_nativeOnNotificationAction(JNIEnv *, jclass, jint actionId) {
+    notify_action_watchers((int)actionId);
+}
+
 static bool register_native_callback(jclass helperClass) {
     if (!helperClass || !g_env) return false;
     JNINativeMethod methods[] = {
         {"nativeOnClipboardChanged", "()V", (void *)Java_dev_clipsync_bridge_ClipSyncBridgeHelper_nativeOnClipboardChanged},
+        {"nativeOnNotificationAction", "(I)V", (void *)Java_dev_clipsync_bridge_ClipSyncBridgeHelper_nativeOnNotificationAction},
     };
     if (g_env->RegisterNatives(helperClass, methods, sizeof(methods) / sizeof(methods[0])) != JNI_OK) {
         jni_clear_exception("RegisterNatives ClipSyncBridgeHelper");
@@ -680,6 +727,141 @@ static bool writeClipboard(const char *text) {
     return ok;
 }
 
+/* --- Notification command (protocol) --- */
+static jobject get_system_context(void) {
+    if (!g_env) return nullptr;
+    jclass atClass = find_class("android/app/ActivityThread");
+    if (!atClass) return nullptr;
+    jmethodID curApp = get_static_method(atClass, "currentApplication", "()Landroid/app/Application;");
+    jobject ctx = curApp ? g_env->CallStaticObjectMethod(atClass, curApp) : nullptr;
+    if (!jni_ok("ActivityThread.currentApplication")) ctx = nullptr;
+    g_env->DeleteLocalRef(atClass);
+    return ctx;
+}
+
+/* Forward decl (defined in socket server section) */
+static void write_err(int fd, const char *reason);
+
+/* Parse NOTIFY header line: "NOTIFY <notif_id> <title_len> <text_len> <num_actions>\n"
+ * Reads the body (title, text, actions) from fd. */
+static void handle_notify_body(int fd, unsigned long notif_id,
+        unsigned long title_len, unsigned long text_len, unsigned long num_actions) {
+    char *title = nullptr, *text_str = nullptr;
+    jstring jtitle = nullptr, jtext = nullptr;
+    jobjectArray jlabels = nullptr;
+    jintArray jactionIds = nullptr;
+    bool ok = false;
+
+    if (!g_env) { write_err(fd, "no_env"); return; }
+    if (title_len > CLIPSYNC_BRIDGE_MAX_PAYLOAD || text_len > CLIPSYNC_BRIDGE_MAX_PAYLOAD
+            || num_actions > 10) {
+        write_err(fd, "too_large"); return;
+    }
+
+    /* Read title */
+    if (title_len > 0) {
+        title = (char *)malloc(title_len + 1);
+        if (!title || bridge_read_full(fd, title, title_len) != 0) {
+            write_err(fd, "bad_title"); goto cleanup;
+        }
+        title[title_len] = '\0';
+    }
+
+    /* Read text */
+    if (text_len > 0) {
+        text_str = (char *)malloc(text_len + 1);
+        if (!text_str || bridge_read_full(fd, text_str, text_len) != 0) {
+            write_err(fd, "bad_text"); goto cleanup;
+        }
+        text_str[text_len] = '\0';
+    }
+
+    /* Read actions */
+    if (num_actions > 0) {
+        static char label_buf[128];
+        static int ids[10];
+        static char *labels[10];
+        memset(labels, 0, sizeof(labels));
+
+        for (unsigned long i = 0; i < num_actions; i++) {
+            unsigned long label_len = 0;
+            unsigned long action_id = 0;
+            char act_header[64];
+            if (bridge_read_line(fd, act_header, sizeof(act_header)) != 0 ||
+                sscanf(act_header, "%lu %lu", &label_len, &action_id) != 2 ||
+                label_len >= sizeof(label_buf)) {
+                write_err(fd, "bad_action"); goto cleanup;
+            }
+            label_buf[0] = '\0';
+            if (label_len > 0 && bridge_read_full(fd, label_buf, label_len) != 0) {
+                write_err(fd, "bad_action_label"); goto cleanup;
+            }
+            label_buf[label_len] = '\0';
+            ids[i] = (int)action_id;
+            labels[i] = strdup(label_buf);
+        }
+
+        /* Build Java arrays */
+        jclass stringClass = find_class("java/lang/String");
+        if (stringClass) {
+            jlabels = g_env->NewObjectArray((jsize)num_actions, stringClass, nullptr);
+            if (jlabels && jni_ok("NewObjectArray labels")) {
+                for (unsigned long i = 0; i < num_actions; i++) {
+                    jstring js = g_env->NewStringUTF(labels[i] ? labels[i] : "");
+                    if (js && jni_ok("NewStringUTF label")) {
+                        g_env->SetObjectArrayElement(jlabels, (jsize)i, js);
+                    }
+                    if (js) g_env->DeleteLocalRef(js);
+                }
+            }
+            g_env->DeleteLocalRef(stringClass);
+        }
+        jactionIds = g_env->NewIntArray((jsize)num_actions);
+        if (jactionIds && jni_ok("NewIntArray actionIds")) {
+            g_env->SetIntArrayRegion(jactionIds, 0, (jsize)num_actions, ids);
+        }
+
+        for (unsigned long i = 0; i < num_actions; i++) free(labels[i]);
+    }
+
+    /* Call helper.postNotification(ctx, notifId, title, text, labels, actionIds) */
+    {
+        jobject ctx = get_system_context();
+        if (!ctx) { write_err(fd, "no_context"); goto cleanup; }
+
+        jclass helper = load_helper_class();
+        if (!helper) { write_err(fd, "no_helper"); g_env->DeleteLocalRef(ctx); goto cleanup; }
+        register_native_callback(helper);
+
+        if (title) jtitle = g_env->NewStringUTF(title);
+        if (text_str) jtext = g_env->NewStringUTF(text_str);
+
+        jmethodID post = get_static_method(helper, "postNotification",
+            "(Landroid/content/Context;ILjava/lang/String;Ljava/lang/String;[Ljava/lang/String;[I)V");
+        if (post) {
+            g_env->CallStaticVoidMethod(helper, post, ctx, (jint)notif_id,
+                jtitle, jtext, jlabels, jactionIds);
+            ok = jni_ok("postNotification");
+        }
+        if (ok) {
+            bridge_write_cstr(fd, "OK\n");
+        } else {
+            write_err(fd, "notify_failed");
+        }
+
+        if (jtitle) g_env->DeleteLocalRef(jtitle);
+        if (jtext) g_env->DeleteLocalRef(jtext);
+        g_env->DeleteLocalRef(helper);
+        g_env->DeleteLocalRef(ctx);
+    }
+
+cleanup:
+    free(title);
+    free(text_str);
+    if (jlabels) g_env->DeleteLocalRef(jlabels);
+    if (jactionIds) g_env->DeleteLocalRef(jactionIds);
+}
+
 /* --- Socket server --- */
 static bool peer_is_root(int fd) {
     struct ucred cred = {};
@@ -763,6 +945,13 @@ static void handle_client(int fd) {
         char *text = readClipboard();
         bridge_write_cstr(fd, text ? "HAS 1\n" : "HAS 0\n");
         if (text) free(text);
+    } else if (strncmp(line, "NOTIFY ", 7) == 0) {
+        unsigned long notif_id = 0, title_len = 0, text_len = 0, num_actions = 0;
+        if (sscanf(line, "NOTIFY %lu %lu %lu %lu", &notif_id, &title_len, &text_len, &num_actions) == 4) {
+            handle_notify_body(fd, notif_id, title_len, text_len, num_actions);
+            close(fd); return;
+        }
+        write_err(fd, "bad_notify_format");
     } else if (strcmp(line, "WATCH\n") == 0) {
         int flags;
         if (!g_clip_listener) {

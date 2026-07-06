@@ -3,7 +3,15 @@ package dev.clipsync.bridge;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.IOnPrimaryClipChangedListener;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.BroadcastReceiver;
 import android.content.pm.PackageManager;
+import android.app.Notification;
+import android.app.NotificationManager;
+import android.app.NotificationChannel;
+import android.app.PendingIntent;
+import android.os.Build;
 import android.provider.Settings;
 import android.util.Log;
 
@@ -13,10 +21,12 @@ import java.lang.reflect.Method;
 
 public final class ClipSyncBridgeHelper {
     private static final String TAG = "ClipSyncBridge";
+    private static volatile boolean sReceiverRegistered = false;
 
     private ClipSyncBridgeHelper() {}
 
     public static native void nativeOnClipboardChanged();
+    public static native void nativeOnNotificationAction(int actionId);
 
     public static IOnPrimaryClipChangedListener makeListener() {
         return new IOnPrimaryClipChangedListener.Stub() {
@@ -25,6 +35,100 @@ public final class ClipSyncBridgeHelper {
                 nativeOnClipboardChanged();
             }
         };
+    }
+
+    /* --- Notification action support --- */
+
+    /* Build a PendingIntent that, when triggered, broadcasts an implicit intent
+     * carrying the actionId as an extra. */
+    public static PendingIntent buildActionPendingIntent(Context context, int actionId) {
+        Intent intent = new Intent("dev.clipsync.NOTIF_ACTION")
+                .putExtra("action_id", actionId);
+        return PendingIntent.getBroadcast(context, actionId, intent,
+                PendingIntent.FLAG_IMMUTABLE);
+    }
+
+    /* Register the receiver that listens for ALL notification action broadcasts.
+     * Idempotent; safe to call multiple times. Must be called with a valid Context
+     * (e.g. system_server's Application context) before any action PendingIntent
+     * is triggered. */
+    public static synchronized boolean registerActionReceiver(Context context) {
+        if (sReceiverRegistered) return true;
+        if (context == null) return false;
+        try {
+            IntentFilter filter = new IntentFilter("dev.clipsync.NOTIF_ACTION");
+            context.registerReceiver(new NotificationActionReceiver(), filter,
+                    Context.RECEIVER_EXPORTED);
+            sReceiverRegistered = true;
+            Log.i(TAG, "notification action receiver registered");
+            return true;
+        } catch (Throwable t) {
+            Log.e(TAG, "registerActionReceiver failed", t);
+            return false;
+        }
+    }
+
+    /* Post a parameterised notification with optional action buttons.
+     * @param notifId   Android notification ID (reuse same ID to update/replace)
+     * @param title     notification title (may be null)
+     * @param text      notification body (may be null)
+     * @param actionLabels  button labels, length == actionIds.length (may be null)
+     * @param actionIds     action IDs returned in callback when button tapped (may be null)
+     */
+    public static void postNotification(Context context, int notifId,
+            String title, String text, String[] actionLabels, int[] actionIds) {
+        registerActionReceiver(context);
+
+        NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+
+        if (Build.VERSION.SDK_INT >= 26) {
+            NotificationChannel channel = new NotificationChannel(
+                    "clipsync", "ClipSync", NotificationManager.IMPORTANCE_HIGH);
+            nm.createNotificationChannel(channel);
+        }
+
+        String safeTitle = (title != null && title.length() > 0) ? title : "ClipSync";
+        Notification.Builder builder = new Notification.Builder(context, "clipsync")
+                .setSmallIcon(android.R.drawable.stat_notify_sync)
+                .setContentTitle(safeTitle)
+                .setAutoCancel(true);
+
+        if (text != null && text.length() > 0) {
+            builder.setContentText(text);
+        }
+
+        int btnCount = 0;
+        if (actionLabels != null && actionIds != null) {
+            int n = Math.min(actionLabels.length, actionIds.length);
+            for (int i = 0; i < n && i < 10; i++) {
+                if (actionLabels[i] == null) continue;
+                PendingIntent pi = buildActionPendingIntent(context, actionIds[i]);
+                if (pi != null) {
+                    Notification.Action action = new Notification.Action.Builder(
+                            0, actionLabels[i], pi).build();
+                    builder.addAction(action);
+                    btnCount++;
+                }
+            }
+        }
+
+        nm.notify(notifId, builder.build());
+        Log.i(TAG, "notification posted: id=" + notifId
+                + " title=\"" + safeTitle + "\" actions=" + btnCount);
+    }
+
+    /* ------ original clipboard listener code (unchanged) ------ */
+
+    static final class NotificationActionReceiver extends BroadcastReceiver {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            int actionId = intent.getIntExtra("action_id", -1);
+            Log.i(TAG, "NotificationActionReceiver.onReceive action=" + intent.getAction()
+                    + " action_id=" + actionId);
+            if (actionId >= 0) {
+                nativeOnNotificationAction(actionId);
+            }
+        }
     }
 
     public static boolean registerDirect(Object clipboardImpl,

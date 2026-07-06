@@ -29,7 +29,7 @@ static int connect_bridge(void) {
 int main(int argc, char **argv) {
     int fd;
     if (argc < 2) {
-        fprintf(stderr, "usage: test_bridge_client read|write [text]|has|watch\n");
+        fprintf(stderr, "usage: test_bridge_client read|write [text]|has|watch|notify <title> <text> [btn_label action_id]...\n");
         return 2;
     }
 
@@ -66,6 +66,36 @@ int main(int argc, char **argv) {
             perror("write");
             close(fd);
             return 1;
+        }
+    } else if (strcmp(argv[1], "notify") == 0) {
+        const char *title = argc >= 3 ? argv[2] : "Test";
+        const char *text  = argc >= 4 ? argv[3] : "";
+        int num_actions = (argc - 4) / 2;
+        if (num_actions < 0) num_actions = 0;
+        if (num_actions > 10) num_actions = 10;
+
+        /* Write header: NOTIFY <notif_id> <title_len> <text_len> <num_actions> */
+        char header[256];
+        size_t tlen = strlen(title);
+        size_t blen = strlen(text);
+        snprintf(header, sizeof(header), "NOTIFY 1 %lu %lu %d\n",
+                 (unsigned long)tlen, (unsigned long)blen, num_actions);
+        if (bridge_write_cstr(fd, header) != 0 ||
+            (tlen > 0 && bridge_write_full(fd, title, tlen) != 0) ||
+            (blen > 0 && bridge_write_full(fd, text, blen) != 0)) {
+            perror("write"); close(fd); return 1;
+        }
+
+        for (int i = 0; i < num_actions; i++) {
+            const char *label = argv[4 + i * 2];
+            char *end;
+            int action_id = (int)strtol(argv[5 + i * 2], &end, 10);
+            size_t llen = strlen(label);
+            snprintf(header, sizeof(header), "%lu %d\n", (unsigned long)llen, action_id);
+            if (bridge_write_cstr(fd, header) != 0 ||
+                bridge_write_full(fd, label, llen) != 0) {
+                perror("write"); close(fd); return 1;
+            }
         }
     } else {
         fprintf(stderr, "unknown command: %s\n", argv[1]);

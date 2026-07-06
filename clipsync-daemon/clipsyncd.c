@@ -101,6 +101,12 @@ static void on_clip_change(const char *text) {
     printf("[clipsyncd] pushed: %lu chars\n", (unsigned long)strlen(text));
 }
 
+static void on_notification_action(void *arg, int action_id) {
+    (void)arg;
+    fprintf(stderr, "[clipsyncd] *** notification action clicked: id=%d\n", action_id);
+    fflush(stderr);
+}
+
 static void on_ws_set(const char *text) {
     size_t len;
     if (!text) return;
@@ -175,6 +181,7 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "[clipsyncd] clipboard WATCH failed to start\n");
         return 1;
     }
+    clip_bridge_set_action_callback(on_notification_action, NULL);
 
     /* Verify bridge: read current clipboard */
     {

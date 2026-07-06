@@ -23,6 +23,8 @@ static atomic_int g_watch_fd = -1;
 static pthread_t g_watch_thread;
 static void (*g_watch_notify_fn)(void *) = NULL;
 static void *g_watch_notify_arg = NULL;
+static void (*g_action_notify_fn)(void *, int) = NULL;
+static void *g_action_notify_arg = NULL;
 
 static int sock_connect(void) {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -154,6 +156,14 @@ static void *watch_thread_main(void *arg) {
                 if (g_watch_notify_fn) {
                     g_watch_notify_fn(g_watch_notify_arg);
                 }
+            } else if (kind == CLIPSYNC_WATCH_LINE_ACTION) {
+                int action_id = 0;
+                if (bridge_parse_action_line(line, &action_id) == 0) {
+                    printf("[clip_bridge] ACTION %d received\n", action_id);
+                    if (g_action_notify_fn) {
+                        g_action_notify_fn(g_action_notify_arg, action_id);
+                    }
+                }
             } else if (kind != CLIPSYNC_WATCH_LINE_READY) {
                 fprintf(stderr, "[clip_bridge] WATCH unknown line: %s", line);
             }
@@ -199,4 +209,48 @@ void clip_bridge_watch_stop(void) {
 
 int clip_bridge_watch_take_changed(void) {
     return atomic_exchange(&g_watch_changed, 0);
+}
+
+void clip_bridge_set_action_callback(void (*fn)(void *, int), void *arg) {
+    g_action_notify_fn = fn;
+    g_action_notify_arg = arg;
+}
+
+int clip_bridge_post_notification(int notif_id, const char *title, const char *text,
+        int num_actions, const char **labels, const int *action_ids) {
+    char header[128];
+    char line[256];
+    int fd;
+    size_t tlen, blen;
+    int i;
+
+    if (num_actions < 0 || num_actions > 10) return -1;
+    if (num_actions > 0 && (!labels || !action_ids)) return -1;
+
+    fd = sock_connect();
+    if (fd < 0) return -1;
+
+    tlen = title ? strlen(title) : 0;
+    blen = text ? strlen(text) : 0;
+    if (tlen > CLIPSYNC_BRIDGE_MAX_PAYLOAD || blen > CLIPSYNC_BRIDGE_MAX_PAYLOAD) {
+        close(fd); return -1;
+    }
+
+    snprintf(header, sizeof(header), "NOTIFY %d %lu %lu %d\n",
+             notif_id, (unsigned long)tlen, (unsigned long)blen, num_actions);
+    if (bridge_write_cstr(fd, header) != 0) { close(fd); return -1; }
+    if (tlen > 0 && bridge_write_full(fd, title, tlen) != 0) { close(fd); return -1; }
+    if (blen > 0 && bridge_write_full(fd, text, blen) != 0) { close(fd); return -1; }
+
+    for (i = 0; i < num_actions; i++) {
+        size_t llen = labels[i] ? strlen(labels[i]) : 0;
+        if (llen > CLIPSYNC_BRIDGE_MAX_PAYLOAD) { close(fd); return -1; }
+        snprintf(header, sizeof(header), "%lu %d\n", (unsigned long)llen, action_ids[i]);
+        if (bridge_write_cstr(fd, header) != 0) { close(fd); return -1; }
+        if (llen > 0 && bridge_write_full(fd, labels[i], llen) != 0) { close(fd); return -1; }
+    }
+
+    if (bridge_read_line(fd, line, sizeof(line)) != 0) { close(fd); return -1; }
+    close(fd);
+    return (strncmp(line, "OK", 2) == 0) ? 0 : -1;
 }
