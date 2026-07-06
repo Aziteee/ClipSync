@@ -11,11 +11,13 @@
 #define CHALLENGE_BYTES 32
 #define CHALLENGE_HEX_LEN 64
 #define AUTH_TIMEOUT_MS 5000
+#define AUTHED_IDLE_TIMEOUT_MS 30000
 
 typedef struct {
     struct mg_connection *conn;
     int authenticated;
     unsigned long long auth_deadline_ms;
+    unsigned long long last_recv_ms;
     char challenge[CHALLENGE_HEX_LEN + 1];
 } ws_client;
 
@@ -55,6 +57,7 @@ static ws_client *client_alloc(struct mg_connection *c) {
             memset(&g_clients[i], 0, sizeof(g_clients[i]));
             g_clients[i].conn = c;
             g_clients[i].auth_deadline_ms = mg_millis() + AUTH_TIMEOUT_MS;
+            g_clients[i].last_recv_ms = mg_millis();
             return &g_clients[i];
         }
     }
@@ -64,9 +67,14 @@ static ws_client *client_alloc(struct mg_connection *c) {
 static void close_expired_auth_clients(void) {
     unsigned long long now = mg_millis();
     for (size_t i = 0; i < MAX_CLIENTS; i++) {
-        if (g_clients[i].conn && !g_clients[i].authenticated &&
-            g_clients[i].auth_deadline_ms != 0 &&
-            now >= g_clients[i].auth_deadline_ms) {
+        if (!g_clients[i].conn) continue;
+        if (!g_clients[i].authenticated) {
+            if (g_clients[i].auth_deadline_ms != 0 &&
+                now >= g_clients[i].auth_deadline_ms) {
+                g_clients[i].conn->is_closing = 1;
+            }
+        } else if (g_clients[i].last_recv_ms != 0 &&
+                   now - g_clients[i].last_recv_ms >= AUTHED_IDLE_TIMEOUT_MS) {
             g_clients[i].conn->is_closing = 1;
         }
     }
@@ -126,6 +134,7 @@ static void handle_auth(struct mg_connection *c, ws_client *client, const char *
     free(response);
     client->authenticated = 1;
     client->auth_deadline_ms = 0;
+    client->last_recv_ms = mg_millis();
     char *ok = protocol_json_build_auth_ok();
     send_text(c, ok);
     free(ok);
@@ -184,6 +193,7 @@ static void ws_event_handler(struct mg_connection *c, int ev, void *ev_data) {
             c->is_closing = 1;
             return;
         }
+        client->last_recv_ms = mg_millis();
         if (!client->authenticated) {
             handle_auth(c, client, wm->data.buf, wm->data.len);
         } else {
@@ -274,13 +284,20 @@ int ws_server_next_timeout_ms(int max_idle_ms) {
 
     now = mg_millis();
     for (size_t i = 0; i < MAX_CLIENTS; i++) {
-        if (g_clients[i].conn && !g_clients[i].authenticated &&
-            g_clients[i].auth_deadline_ms != 0) {
-            unsigned long long remaining;
-            if (now >= g_clients[i].auth_deadline_ms) {
-                return 0;
+        if (!g_clients[i].conn) continue;
+
+        if (!g_clients[i].authenticated) {
+            if (g_clients[i].auth_deadline_ms == 0) continue;
+            if (now >= g_clients[i].auth_deadline_ms) return 0;
+            unsigned long long remaining = g_clients[i].auth_deadline_ms - now;
+            if (remaining < (unsigned long long)timeout) {
+                timeout = (int)remaining;
             }
-            remaining = g_clients[i].auth_deadline_ms - now;
+        } else {
+            if (g_clients[i].last_recv_ms == 0) continue;
+            unsigned long long idle = now - g_clients[i].last_recv_ms;
+            if (idle >= AUTHED_IDLE_TIMEOUT_MS) return 0;
+            unsigned long long remaining = AUTHED_IDLE_TIMEOUT_MS - idle;
             if (remaining < (unsigned long long)timeout) {
                 timeout = (int)remaining;
             }
