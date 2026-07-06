@@ -16,6 +16,7 @@
 #include "device_identity.h"
 
 #define MAX_IDLE_POLL_MS 5000
+#define IDLE_POLL_MS_NO_PC 60000
 #define MDNS_ANNOUNCE_INTERVAL_MS 30000LL
 
 static volatile sig_atomic_t running = 1;
@@ -199,7 +200,7 @@ int main(int argc, char *argv[]) {
         }
 
         now_ms = monotonic_millis();
-        timeout_ms = ws_server_next_timeout_ms(MAX_IDLE_POLL_MS);
+        timeout_ms = ws_server_next_timeout_ms(last_pc_connected == 1 ? MAX_IDLE_POLL_MS : IDLE_POLL_MS_NO_PC);
         if (last_pc_connected == 0) {
             timeout_ms = min_timeout_until(next_mdns_announce_ms, now_ms, timeout_ms);
         }
