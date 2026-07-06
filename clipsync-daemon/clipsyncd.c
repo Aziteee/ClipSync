@@ -44,8 +44,8 @@ static void update_module_status(clipsync_daemon_config *cfg) {
     const char *run_state;
     const char *bridge_state;
     const char *pc_state;
-    char cmd[512];
-    static char last_cmd[512] = {0};
+    char desc[256];
+    static char last_desc[256] = {0};
 
     if (!cfg || !running) {
         run_state = "\xe2\x8f\xb9 Stopped";
@@ -57,12 +57,12 @@ static void update_module_status(clipsync_daemon_config *cfg) {
         pc_state = ws_server_authenticated_count() > 0 ? "\xe2\x9c\x85 Connected" : "\xe2\x9a\xaa Waiting";
     }
 
-    snprintf(cmd, sizeof(cmd),
-        "ksud module config set override.description \"%s | Bridge: %s | PC: %s | Port: %d\"",
+    snprintf(desc, sizeof(desc),
+        "%s | Bridge: %s | PC: %s | Port: %d",
         run_state, bridge_state, pc_state, cfg ? cfg->port : 0);
 
-    if (strcmp(cmd, last_cmd) == 0) return;
-    strncpy(last_cmd, cmd, sizeof(last_cmd) - 1);
+    if (strcmp(desc, last_desc) == 0) return;
+    strncpy(last_desc, desc, sizeof(last_desc) - 1);
 
     {
         pid_t pid = fork();
@@ -72,7 +72,9 @@ static void update_module_status(clipsync_daemon_config *cfg) {
         }
         if (pid == 0) {
             if (fork() > 0) _exit(0);
-            execl("/system/bin/sh", "sh", "-c", cmd, (char *)NULL);
+            setenv("KSU_MODULE", "clipsyncd", 1);
+            execlp("ksud", "ksud", "module", "config", "set",
+                   "override.description", desc, (char *)NULL);
             _exit(127);
         }
         waitpid(pid, NULL, 0);

@@ -748,6 +748,92 @@ bool mg_mdns_query(struct mg_connection *c, const char *name,
   return mg_dns_send(c, &name_, 0, false);
 }
 
+static bool mg_mdns_send_announcement(struct mg_connection *c, const void *buf,
+                                      size_t len) {
+  MG_SOCKET_TYPE fd = MG_INVALID_SOCKET;
+  struct sockaddr_in dst, bind_addr;
+  int on = 1;
+  unsigned char ttl = 255;
+  struct mg_addr local_addr, multicast_addr;
+  ssize_t n;
+
+  memset(&multicast_addr, 0, sizeof(multicast_addr));
+  multicast_addr.port = mg_htons(5353);
+  multicast_addr.addr.ip4 = MG_IPV4(224, 0, 0, 251);
+  memset(&local_addr, 0, sizeof(local_addr));
+  mg_getlocaddr(c, &multicast_addr, &local_addr);
+
+  fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+  if (fd == MG_INVALID_SOCKET) return false;
+
+#if defined(SO_REUSEADDR)
+  setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char *) &on, sizeof(on));
+#endif
+  setsockopt(fd, IPPROTO_IP, IP_MULTICAST_TTL, (char *) &ttl, sizeof(ttl));
+  if (memcmp(local_addr.addr.ip, "\0\0\0\0", 4) != 0) {
+    struct in_addr ifaddr;
+    memcpy(&ifaddr, local_addr.addr.ip, sizeof(ifaddr));
+    setsockopt(fd, IPPROTO_IP, IP_MULTICAST_IF, (char *) &ifaddr,
+               sizeof(ifaddr));
+  }
+
+  memset(&bind_addr, 0, sizeof(bind_addr));
+  bind_addr.sin_family = AF_INET;
+  bind_addr.sin_port = mg_htons(5353);
+  bind_addr.sin_addr.s_addr = mg_htonl(INADDR_ANY);
+  if (bind(fd, (struct sockaddr *) &bind_addr, sizeof(bind_addr)) != 0) {
+    close(fd);
+    return false;
+  }
+
+  memset(&dst, 0, sizeof(dst));
+  dst.sin_family = AF_INET;
+  dst.sin_port = mg_htons(5353);
+  dst.sin_addr.s_addr = MG_IPV4(224, 0, 0, 251);
+  n = sendto(fd, (const char *) buf, len, 0, (struct sockaddr *) &dst,
+             sizeof(dst));
+  close(fd);
+  return n == (ssize_t) len;
+}
+
+bool mg_mdns_announce(struct mg_connection *c, struct mg_dnssd_record *r,
+                      struct mg_str name) {
+  uint8_t buf[sizeof(struct mg_dns_header) + 256 + sizeof(mdns_answer) + 4];
+  struct mg_dns_header *h = (struct mg_dns_header *) buf;
+  uint8_t *p = &buf[sizeof(*h)], *o = p, *aux;
+  uint16_t offset;
+  if (c == NULL || r == NULL || name.buf == NULL || name.len == 0) return false;
+  if ((sizeof(*h) + r->srvcproto.len + 8 + name.len + 13 + 2 + name.len + 19 +
+       2 + r->txt.len + 10 + 2 + 14) > sizeof(buf))
+    return false;
+
+  memset(h, 0, sizeof(*h));
+  h->flags = mg_htons(0x8400);
+  h->num_answers = mg_htons(1);
+  h->num_other_prs = mg_htons(3);
+
+  p = build_srv_name(p, r);
+  aux = build_ptr_record(&name, p, (uint16_t) (o - buf));
+  o = p + sizeof(mdns_answer);
+  offset = mg_htons((uint16_t) (o - buf));
+  o = p - 7;
+  p = aux;
+  memcpy(p, &offset, 2);
+  *p |= 0xC0, p += 2;
+  aux = p;
+  p = build_srv_record(&name, p, r, (uint16_t) (o - buf));
+  o = aux + sizeof(mdns_answer) + 6;
+  memcpy(p, &offset, 2);
+  *p |= 0xC0, p += 2;
+  p = build_txt_record(p, r);
+  offset = mg_htons((uint16_t) (o - buf));
+  memcpy(p, &offset, 2);
+  *p |= 0xC0, p += 2;
+  p = build_a_record(c, p, NULL);
+
+  return mg_mdns_send_announcement(c, buf, (size_t) (p - buf));
+}
+
 #ifdef MG_ENABLE_LINES
 #line 1 "src/event.c"
 #endif
