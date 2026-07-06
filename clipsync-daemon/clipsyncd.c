@@ -13,6 +13,7 @@
 #include "protocol_json.h"
 #include "daemon_config.h"
 #include "last_clip.h"
+#include "device_identity.h"
 
 #define MAX_IDLE_POLL_MS 5000
 #define MDNS_ANNOUNCE_INTERVAL_MS 30000LL
@@ -129,6 +130,7 @@ int main(int argc, char *argv[]) {
     clipsync_daemon_config cfg;
     long long next_mdns_announce_ms;
     int last_pc_connected = -1;
+    char mdns_instance[64];
 
     clipsync_last_clip_init(&g_last_clip);
     clipsync_config_init(&cfg);
@@ -153,7 +155,11 @@ int main(int argc, char *argv[]) {
     }
     ws_server_set_on_set(on_ws_set);
 
-    if (mdns_publish_init(ws_server_mgr(), cfg.port, "ClipSync Android") != 0) {
+    if (clipsync_device_instance_name(mdns_instance, sizeof(mdns_instance)) != 0) {
+        snprintf(mdns_instance, sizeof(mdns_instance), "ClipSync-Android");
+    }
+
+    if (mdns_publish_init(ws_server_mgr(), cfg.port, mdns_instance) != 0) {
         fprintf(stderr, "[clipsyncd] mdns_publish_init failed\n");
         return 1;
     }

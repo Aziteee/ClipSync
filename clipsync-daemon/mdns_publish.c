@@ -7,7 +7,7 @@
 #define CLIPSYNC_MDNS_SERVICE "_clipsync._tcp"
 #define CLIPSYNC_MDNS_SERVICE_LOCAL "_clipsync._tcp.local"
 
-static char g_instance[64] = "ClipSync Android";
+static char g_instance[64] = "ClipSync-Android";
 static char g_txt_raw[128];
 static size_t g_txt_len = 0;
 static struct mg_dnssd_record g_record;

@@ -48,6 +48,7 @@ struct DeviceTarget {
     uri: String,
     origin: DeviceOrigin,
     enabled: bool,
+    discovery_key: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -248,7 +249,14 @@ fn target_from_uri(uri: String, name: Option<String>, origin: DeviceOrigin) -> D
         uri,
         origin,
         enabled: true,
+        discovery_key: None,
     }
+}
+
+fn target_from_discovered(endpoint: mdns::DiscoveredEndpoint) -> DeviceTarget {
+    let mut target = target_from_uri(endpoint.uri, Some(endpoint.name), DeviceOrigin::Discovered);
+    target.discovery_key = Some(endpoint.service_name);
+    target
 }
 
 fn configured_device_targets(cfg: &config::ClipSyncConfig) -> Vec<DeviceTarget> {
@@ -345,7 +353,7 @@ fn send_aggregate_state(
     send_state(proxy, aggregate_conn_state(handles));
 }
 
-fn start_discovery(port: u16) -> Option<mpsc::UnboundedReceiver<String>> {
+fn start_discovery(port: u16) -> Option<mpsc::UnboundedReceiver<mdns::DiscoveredEndpoint>> {
     match mdns::discover(port) {
         Ok(rx) => Some(rx),
         Err(e) => {
@@ -355,7 +363,9 @@ fn start_discovery(port: u16) -> Option<mpsc::UnboundedReceiver<String>> {
     }
 }
 
-async fn recv_discovery(rx: &mut Option<mpsc::UnboundedReceiver<String>>) -> Option<String> {
+async fn recv_discovery(
+    rx: &mut Option<mpsc::UnboundedReceiver<mdns::DiscoveredEndpoint>>,
+) -> Option<mdns::DiscoveredEndpoint> {
     match rx {
         Some(rx) => rx.recv().await,
         None => pending().await,
@@ -395,6 +405,47 @@ fn register_device(
             last_error: None,
         },
     );
+    true
+}
+
+fn replace_moved_discovered_device(
+    target: &DeviceTarget,
+    handles: &mut HashMap<DeviceId, DeviceHandle>,
+    engine: &mut SyncEngine,
+) -> bool {
+    if target.origin != DeviceOrigin::Discovered {
+        return false;
+    }
+    let Some(discovery_key) = target.discovery_key.as_deref() else {
+        return false;
+    };
+
+    let old_id = handles.iter().find_map(|(id, handle)| {
+        let same_service = handle.target.origin == DeviceOrigin::Discovered
+            && handle.target.discovery_key.as_deref() == Some(discovery_key);
+        let moved = handle.target.uri != target.uri;
+        if same_service && moved {
+            Some(id.clone())
+        } else {
+            None
+        }
+    });
+
+    let Some(old_id) = old_id else {
+        return false;
+    };
+
+    if let Some(text) = engine.take_pending_for(&old_id) {
+        engine.store_pending_for(target.id.clone(), text);
+    }
+    if let Some(old) = handles.remove(&old_id) {
+        log::info!(
+            "Discovered device moved: service={} {} -> {}",
+            discovery_key,
+            old.target.uri,
+            target.uri
+        );
+    }
     true
 }
 
@@ -703,10 +754,15 @@ async fn run_sync_loop(cfg: Arc<config::ClipSyncConfig>, proxy: EventLoopProxy<U
 
     loop {
         tokio::select! {
-            uri = recv_discovery(&mut discovery_rx), if auto_discovery && discovery_rx.is_some() => {
-                match uri {
-                    Some(uri) => {
-                        let target = target_from_uri(uri, None, DeviceOrigin::Discovered);
+            endpoint = recv_discovery(&mut discovery_rx), if auto_discovery && discovery_rx.is_some() => {
+                match endpoint {
+                    Some(endpoint) => {
+                        let target = target_from_discovered(endpoint);
+                        let replaced = replace_moved_discovered_device(
+                            &target,
+                            &mut handles,
+                            &mut engine,
+                        );
                         if register_device(
                             target,
                             &mut handles,
@@ -715,6 +771,8 @@ async fn run_sync_loop(cfg: Arc<config::ClipSyncConfig>, proxy: EventLoopProxy<U
                             &mut engine,
                             latest_text.as_deref(),
                         ) {
+                            send_aggregate_state(&proxy, &handles);
+                        } else if replaced {
                             send_aggregate_state(&proxy, &handles);
                         }
                     }
@@ -906,6 +964,44 @@ mod tests {
     fn discovered_endpoints_are_retried_after_transient_disconnects() {
         assert!(should_retry_failed_endpoint(DeviceOrigin::Static));
         assert!(should_retry_failed_endpoint(DeviceOrigin::Discovered));
+    }
+
+    #[test]
+    fn moved_discovered_device_replaces_old_ip() {
+        let old = target_from_discovered(mdns::DiscoveredEndpoint {
+            uri: "ws://192.168.0.156:5287/ws".to_string(),
+            name: "ClipSync-Android".to_string(),
+            service_name: "ClipSync-Android._clipsync._tcp.local.".to_string(),
+        });
+        let new = target_from_discovered(mdns::DiscoveredEndpoint {
+            uri: "ws://192.168.0.157:5287/ws".to_string(),
+            name: "ClipSync-Android".to_string(),
+            service_name: "ClipSync-Android._clipsync._tcp.local.".to_string(),
+        });
+        let old_id = old.id.clone();
+        let new_id = new.id.clone();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mut handles = HashMap::new();
+        handles.insert(
+            old.id.clone(),
+            DeviceHandle {
+                target: old,
+                tx,
+                state: DeviceConnectionState::Connecting,
+                last_error: Some("connect timed out".to_string()),
+            },
+        );
+        let mut engine = SyncEngine::new();
+        engine.store_pending_for(old_id.clone(), "pending".to_string());
+
+        assert!(replace_moved_discovered_device(
+            &new,
+            &mut handles,
+            &mut engine
+        ));
+
+        assert!(!handles.contains_key(&old_id));
+        assert_eq!(engine.take_pending_for(&new_id).as_deref(), Some("pending"));
     }
 
     #[test]
