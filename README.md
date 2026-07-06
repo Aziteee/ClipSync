@@ -133,5 +133,5 @@ make package
 
 ## 注意
 
+- 理论支持 Windows 10/11 以及 Android 10+ 系统。
 - 配置 `[[devices]]` 后，PC 将跳过 mDNS 自动发现，仅连接列表中启用（`enabled = true`）的设备。
-- 仅在 Windows 11 及 Android 16 (ColorOS) 环境测试成功，其他环境不保证正常运行。
