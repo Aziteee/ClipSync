@@ -49,7 +49,7 @@ pub fn now_millis() -> u64 {
 
 impl ClipMessage {
     pub fn to_json(&self) -> String {
-        serde_json::to_string(self).unwrap()
+        serde_json::to_string(self).expect("ClipMessage serialization should never fail")
     }
 
     pub fn from_json(json: &str) -> serde_json::Result<Self> {
@@ -65,11 +65,6 @@ impl ClipMessage {
             origin: None,
             device_id: None,
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn set(text: String) -> Self {
-        Self::set_with_meta(text, None, None, None)
     }
 
     pub fn set_with_meta(

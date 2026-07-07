@@ -75,7 +75,7 @@ fn icon_for_state(state: ConnState) -> Icon {
 
 impl Tray {
     pub fn new(
-        event_loop: &ActiveEventLoop,
+        _event_loop: &ActiveEventLoop,
         proxy: EventLoopProxy<UiEvent>,
         start_with_windows: bool,
     ) -> anyhow::Result<Self> {
@@ -122,8 +122,6 @@ impl Tray {
                 }
             }
         });
-
-        let _ = event_loop;
 
         Ok(Self {
             tray_icon,

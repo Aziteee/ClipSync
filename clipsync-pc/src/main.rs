@@ -861,7 +861,7 @@ fn main() -> anyhow::Result<()> {
     let event_loop = EventLoop::<UiEvent>::with_user_event().build()?;
     let proxy = event_loop.create_proxy();
 
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Runtime::new()?;
     let tokio_handle = rt.handle().clone();
 
     let cfg_clone = cfg.clone();
