@@ -273,3 +273,12 @@ adb shell "su -c 'pkill clipsyncd; /data/adb/modules/clipsyncd/system/bin/clipsy
 
 1. 由于手机内核限制， PC multicast 查询无法到达手机。因此目前只依靠手机 主动发包到pc实现
 
+## 通知测试
+
+### 模拟通知按钮点击验证回调
+
+```powershell
+# 模拟用户点击 action_id=1 的按钮
+adb shell "su -c 'am broadcast -a dev.clipsync.NOTIF_ACTION --ei action_id 1'"
+```
+
