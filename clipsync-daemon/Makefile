@@ -8,7 +8,7 @@ ANDROID_JAR ?= $(ANDROID_SDK_ROOT)\platforms\$(ANDROID_PLATFORM)\android.jar
 CFLAGS = -Wall -Wextra -O2 -I. -Ithird_party/mongoose -DMG_ENABLE_MDNS=1
 LDFLAGS = -ldl
 TARGET = $(BUILD_DIR)/clipsyncd
-SRCS = clipsyncd.c clip_bridge_client.c bridge_protocol.c ws_server.c mdns_publish.c protocol_json.c crypto_hmac.c daemon_config.c last_clip.c device_identity.c softap_detect.c third_party/mongoose/mongoose.c
+SRCS = clipsyncd.c clip_bridge_client.c bridge_protocol.c ws_server.c mdns_publish.c protocol_json.c crypto_hmac.c daemon_config.c last_clip.c device_identity.c softap_detect.c logger.c third_party/mongoose/mongoose.c
 OBJS = $(SRCS:%.c=$(BUILD_DIR)/%.o)
 NDK_BUILD ?= ndk-build
 ZYGISK_SO = module/zygisk/arm64-v8a.so
@@ -120,9 +120,9 @@ $(BUILD_DIR)/tests/test_last_clip: tests/test_last_clip.c last_clip.c last_clip.
 test-last-clip: $(BUILD_DIR)/tests/test_last_clip
 	$(BUILD_DIR)/tests/test_last_clip
 
-$(BUILD_DIR)/tests/test_daemon_config: tests/test_daemon_config.c daemon_config.c daemon_config.h protocol.h | $(BUILD_DIR)
+$(BUILD_DIR)/tests/test_daemon_config: tests/test_daemon_config.c daemon_config.c daemon_config.h logger.c logger.h protocol.h | $(BUILD_DIR)
 	@if not exist $(BUILD_DIR)\tests mkdir $(BUILD_DIR)\tests
-	$(CC) $(CFLAGS) -o $@ tests/test_daemon_config.c daemon_config.c
+	$(CC) $(CFLAGS) -o $@ tests/test_daemon_config.c daemon_config.c logger.c
 
 test-daemon-config: $(BUILD_DIR)/tests/test_daemon_config
 	$(BUILD_DIR)/tests/test_daemon_config

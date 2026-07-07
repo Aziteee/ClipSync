@@ -14,6 +14,7 @@
 #include <sys/un.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include "logger.h"
 
 #define SOCK_ABSTRACT_NAME "clipbridge"
 
@@ -47,14 +48,14 @@ int clip_bridge_init(void) {
         int fd = sock_connect();
         if (fd >= 0) {
             close(fd);
-            printf("[clip_bridge] connected to clipboard bridge (attempt %d)\n", attempt + 1);
+            log_printf("[clip_bridge] connected to clipboard bridge (attempt %d)\n", attempt + 1);
             return 0;
         }
         if (attempt < 9) {
             sleep(1);
         }
     }
-    fprintf(stderr, "[clip_bridge] cannot connect to @%s after 10 attempts\n", SOCK_ABSTRACT_NAME);
+    log_printf("[clip_bridge] cannot connect to @%s after 10 attempts\n", SOCK_ABSTRACT_NAME);
     return -1;
 }
 
@@ -135,7 +136,7 @@ static void *watch_thread_main(void *arg) {
         if (bridge_read_line(fd, line, sizeof(line)) != 0 ||
             bridge_parse_watch_line(line) != CLIPSYNC_WATCH_LINE_READY) {
             if (strncmp(line, "ERR ", 4) == 0) {
-                fprintf(stderr, "[clip_bridge] WATCH unavailable: %s", line);
+                log_printf("[clip_bridge] WATCH unavailable: %s", line);
             }
             close(fd);
             atomic_store(&g_watch_fd, -1);
@@ -143,7 +144,7 @@ static void *watch_thread_main(void *arg) {
             continue;
         }
 
-        printf("[clip_bridge] WATCH ready\n");
+        log_printf("[clip_bridge] WATCH ready\n");
 
         while (atomic_load(&g_watch_running)) {
             clipsync_watch_line kind;
@@ -159,13 +160,13 @@ static void *watch_thread_main(void *arg) {
             } else if (kind == CLIPSYNC_WATCH_LINE_ACTION) {
                 int action_id = 0;
                 if (bridge_parse_action_line(line, &action_id) == 0) {
-                    printf("[clip_bridge] ACTION %d received\n", action_id);
+                    log_printf("[clip_bridge] ACTION %d received\n", action_id);
                     if (g_action_notify_fn) {
                         g_action_notify_fn(g_action_notify_arg, action_id);
                     }
                 }
             } else if (kind != CLIPSYNC_WATCH_LINE_READY) {
-                fprintf(stderr, "[clip_bridge] WATCH unknown line: %s", line);
+                log_printf("[clip_bridge] WATCH unknown line: %s", line);
             }
         }
 

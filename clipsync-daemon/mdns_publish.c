@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <arpa/inet.h>
+#include "logger.h"
 
 #define CLIPSYNC_MDNS_SERVICE "_clipsync._tcp"
 #define CLIPSYNC_MDNS_SERVICE_LOCAL "_clipsync._tcp.local"
@@ -54,7 +55,7 @@ int mdns_publish_init(struct mg_mgr *mgr, int port, const char *instance_name) {
     }
 
     if (txt_build_default() != 0) {
-        fprintf(stderr, "[mdns] failed to build TXT record\n");
+        log_printf("[mdns] failed to build TXT record\n");
         return -1;
     }
 
@@ -65,7 +66,7 @@ int mdns_publish_init(struct mg_mgr *mgr, int port, const char *instance_name) {
 
     g_mdns = mg_mdns_listen(mgr, mdns_event_handler, g_instance);
     if (!g_mdns) {
-        fprintf(stderr, "[mdns] failed to start mDNS listener\n");
+        log_printf("[mdns] failed to start mDNS listener\n");
         return -1;
     }
 
@@ -78,16 +79,16 @@ int mdns_publish_init(struct mg_mgr *mgr, int port, const char *instance_name) {
         struct in_addr a;
         a.s_addr = g_softap.ipv4;
         inet_ntop(AF_INET, &a, ip_str, sizeof(ip_str));
-        printf("[mdns] SoftAP iface: %s (%s)\n", g_softap.name, ip_str);
+        log_printf("[mdns] SoftAP iface: %s (%s)\n", g_softap.name, ip_str);
         if (softap_setup_multicast_route(g_softap.name) != 0) {
-            fprintf(stderr, "[mdns] warning: failed to add multicast route via %s\n",
+            log_printf("[mdns] warning: failed to add multicast route via %s\n",
                     g_softap.name);
         }
     } else {
-        fprintf(stderr, "[mdns] no SoftAP interface detected; mDNS may egress via mobile data\n");
+        log_printf("[mdns] no SoftAP interface detected; mDNS may egress via mobile data\n");
     }
 
-    printf("[mdns] publishing %s as '%s' on port %d\n", CLIPSYNC_MDNS_SERVICE_LOCAL, g_instance, port);
+    log_printf("[mdns] publishing %s as '%s' on port %d\n", CLIPSYNC_MDNS_SERVICE_LOCAL, g_instance, port);
     return 0;
 }
 

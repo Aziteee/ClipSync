@@ -14,6 +14,7 @@
 #include "daemon_config.h"
 #include "last_clip.h"
 #include "device_identity.h"
+#include "logger.h"
 
 #define MAX_IDLE_POLL_MS 5000
 #define IDLE_POLL_MS_NO_PC 60000
@@ -68,7 +69,7 @@ static void update_module_status(clipsync_daemon_config *cfg) {
     {
         pid_t pid = fork();
         if (pid < 0) {
-            fprintf(stderr, "[clipsyncd] fork failed for module status update\n");
+            log_printf("[clipsyncd] fork failed for module status update\n");
             return;
         }
         if (pid == 0) {
@@ -88,7 +89,7 @@ static void on_clip_change(const char *text) {
     len = strlen(text);
     if (clipsync_last_clip_same(&g_last_clip, text, len)) return;
     if (clipsync_last_clip_update(&g_last_clip, text, len) != 0) {
-        fprintf(stderr, "[clipsyncd] failed to update clipboard dedupe state\n");
+        log_printf("[clipsyncd] failed to update clipboard dedupe state\n");
     }
 
     unsigned long long ts = (unsigned long long)time(NULL) * 1000ULL;
@@ -97,25 +98,24 @@ static void on_clip_change(const char *text) {
         ws_server_broadcast(json);
         free(json);
     }
-    printf("[clipsyncd] pushed: %lu chars\n", (unsigned long)strlen(text));
+    log_printf("[clipsyncd] pushed: %lu chars\n", (unsigned long)strlen(text));
 }
 
 static void on_notification_action(void *arg, int action_id) {
     (void)arg;
-    fprintf(stderr, "[clipsyncd] *** notification action clicked: id=%d\n", action_id);
-    fflush(stderr);
+    log_printf("[clipsyncd] *** notification action clicked: id=%d\n", action_id);
 }
 
 static void on_ws_set(const char *text) {
     size_t len;
     if (!text) return;
     len = strlen(text);
-    printf("[clipsyncd] received set: %lu chars\n", (unsigned long)len);
+    log_printf("[clipsyncd] received set: %lu chars\n", (unsigned long)len);
     if (clipsync_last_clip_update(&g_last_clip, text, len) != 0) {
-        fprintf(stderr, "[clipsyncd] failed to update clipboard dedupe state\n");
+        log_printf("[clipsyncd] failed to update clipboard dedupe state\n");
     }
     if (clip_bridge_set_text(text) != 0) {
-        fprintf(stderr, "[clipsyncd] failed to write Android clipboard\n");
+        log_printf("[clipsyncd] failed to write Android clipboard\n");
     }
 }
 
@@ -144,19 +144,23 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    if (logger_init() != 0) {
+        log_printf("[clipsyncd] logger init failed, falling back to stderr\n");
+    }
+
     signal(SIGTERM, sig_handler);
     signal(SIGINT, sig_handler);
 
-    printf("[clipsyncd] config: path=%s loaded=%s port=%d secret=%s\n",
+    log_printf("[clipsyncd] config: path=%s loaded=%s port=%d secret=%s\n",
            cfg.config_path,
            cfg.config_loaded ? "yes" : "no",
            cfg.port,
            cfg.secret[0] ? "(set)" : "(empty)");
-    printf("[clipsyncd] starting on port %d...\n", cfg.port);
+    log_printf("[clipsyncd] starting on port %d...\n", cfg.port);
 
     /* Initialize subsystems */
     if (ws_server_init(cfg.port, cfg.secret) != 0) {
-        fprintf(stderr, "[clipsyncd] ws_server_init failed\n");
+        log_printf("[clipsyncd] ws_server_init failed\n");
         return 1;
     }
     ws_server_set_on_set(on_ws_set);
@@ -166,18 +170,18 @@ int main(int argc, char *argv[]) {
     }
 
     if (mdns_publish_init(ws_server_mgr(), cfg.port, mdns_instance) != 0) {
-        fprintf(stderr, "[clipsyncd] mdns_publish_init failed\n");
+        log_printf("[clipsyncd] mdns_publish_init failed\n");
         return 1;
     }
     mdns_publish_announce();
 
     if (clip_bridge_init() != 0) {
-        fprintf(stderr, "[clipsyncd] clip_bridge_init failed\n");
+        log_printf("[clipsyncd] clip_bridge_init failed\n");
         return 1;
     }
     g_bridge_healthy = 1;
     if (clip_bridge_watch_start(wake_main_loop, NULL) != 0) {
-        fprintf(stderr, "[clipsyncd] clipboard WATCH failed to start\n");
+        log_printf("[clipsyncd] clipboard WATCH failed to start\n");
         return 1;
     }
     clip_bridge_set_action_callback(on_notification_action, NULL);
@@ -185,11 +189,11 @@ int main(int argc, char *argv[]) {
     /* Verify bridge: read current clipboard */
     {
         char *txt = clip_bridge_get_text();
-        printf("[clipsyncd] current clipboard: %s\n", txt ? txt : "(empty)");
+        log_printf("[clipsyncd] current clipboard: %s\n", txt ? txt : "(empty)");
         if (txt) free(txt);
     }
 
-    printf("[clipsyncd] running. Waiting for connections and clipboard events...\n");
+    log_printf("[clipsyncd] running. Waiting for connections and clipboard events...\n");
     update_module_status(&cfg);
     last_pc_connected = ws_server_authenticated_count() > 0 ? 1 : 0;
     next_mdns_announce_ms = monotonic_millis() + (long long)cfg.mdns_announce_interval_ms;
@@ -235,7 +239,8 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    printf("[clipsyncd] shutting down.\n");
+    log_printf("[clipsyncd] shutting down.\n");
+    logger_close();
     clip_bridge_watch_stop();
     update_module_status(NULL);
     clipsync_last_clip_free(&g_last_clip);

@@ -2,6 +2,7 @@
 #include "protocol.h"
 #include "protocol_json.h"
 #include "crypto_hmac.h"
+#include "logger.h"
 #include "mongoose.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -222,19 +223,19 @@ int ws_server_init(int port, const char *secret) {
         g_wakeup_enabled = 1;
     } else {
         g_wakeup_enabled = 0;
-        fprintf(stderr, "[ws_server] mg_wakeup_init failed; clipboard wakeups may wait for poll timeout\n");
+        log_printf("[ws_server] mg_wakeup_init failed; clipboard wakeups may wait for poll timeout\n");
     }
 
     snprintf(listen_url, sizeof(listen_url), "http://0.0.0.0:%d", port);
     g_listener = mg_http_listen(&g_mgr, listen_url, ws_event_handler, NULL);
     if (!g_listener) {
-        fprintf(stderr, "[ws_server] failed to listen on %s\n", listen_url);
+        log_printf("[ws_server] failed to listen on %s\n", listen_url);
         mg_mgr_free(&g_mgr);
         return -1;
     }
 
     g_initialized = 1;
-    printf("[ws_server] listening on %s\n", listen_url);
+    log_printf("[ws_server] listening on %s\n", listen_url);
     return 0;
 }
 

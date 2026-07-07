@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "logger.h"
 
 static char *trim(char *s) {
     char *end;
@@ -44,7 +45,7 @@ static void strip_comment(char *s) {
 static int copy_value(char *dst, size_t dst_len, const char *src) {
     size_t len = strlen(src);
     if (len >= dst_len) {
-        fprintf(stderr, "[config] value too long\n");
+        log_printf("[config] value too long\n");
         return -1;
     }
     memcpy(dst, src, len + 1);
@@ -81,7 +82,7 @@ static int parse_string_value(const char *value, char *out, size_t out_len) {
             else if (ch == '\0') return -1;
         }
         if (j + 1 >= sizeof(buf)) {
-            fprintf(stderr, "[config] string value too long\n");
+            log_printf("[config] string value too long\n");
             return -1;
         }
         buf[j++] = ch;
@@ -98,7 +99,7 @@ static int parse_string_value(const char *value, char *out, size_t out_len) {
 static int apply_pair(clipsync_daemon_config *cfg, const char *section, const char *key, const char *value) {
     if (strcmp(section, "connection") == 0 && strcmp(key, "port") == 0) {
         if (parse_int_value(value, 1, 65535, &cfg->port) != 0) {
-            fprintf(stderr, "[config] invalid connection.port: %s\n", value);
+            log_printf("[config] invalid connection.port: %s\n", value);
             return -1;
         }
         return 0;
@@ -106,7 +107,7 @@ static int apply_pair(clipsync_daemon_config *cfg, const char *section, const ch
 
     if (strcmp(section, "connection") == 0 && strcmp(key, "mdns_announce_interval_ms") == 0) {
         if (parse_int_value(value, 1000, 3600000, &cfg->mdns_announce_interval_ms) != 0) {
-            fprintf(stderr, "[config] invalid connection.mdns_announce_interval_ms: %s\n", value);
+            log_printf("[config] invalid connection.mdns_announce_interval_ms: %s\n", value);
             return -1;
         }
         return 0;
@@ -138,7 +139,7 @@ int clipsync_config_load_file(clipsync_daemon_config *cfg, const char *path) {
     fp = fopen(path, "rb");
     if (!fp) {
         if (errno == ENOENT) return 0;
-        fprintf(stderr, "[config] failed to open %s: %s\n", path, strerror(errno));
+        log_printf("[config] failed to open %s: %s\n", path, strerror(errno));
         return -1;
     }
 
@@ -157,7 +158,7 @@ int clipsync_config_load_file(clipsync_daemon_config *cfg, const char *path) {
         if (*s == '[') {
             char *end = strchr(s, ']');
             if (!end) {
-                fprintf(stderr, "[config] invalid section at %s:%u\n", path, line_no);
+                log_printf("[config] invalid section at %s:%u\n", path, line_no);
                 fclose(fp);
                 return -1;
             }
@@ -171,7 +172,7 @@ int clipsync_config_load_file(clipsync_daemon_config *cfg, const char *path) {
 
         eq = strchr(s, '=');
         if (!eq) {
-            fprintf(stderr, "[config] invalid line at %s:%u\n", path, line_no);
+            log_printf("[config] invalid line at %s:%u\n", path, line_no);
             fclose(fp);
             return -1;
         }
@@ -179,14 +180,14 @@ int clipsync_config_load_file(clipsync_daemon_config *cfg, const char *path) {
         key = trim(s);
         value = trim(eq + 1);
         if (apply_pair(cfg, section, key, value) != 0) {
-            fprintf(stderr, "[config] failed to parse %s:%u\n", path, line_no);
+            log_printf("[config] failed to parse %s:%u\n", path, line_no);
             fclose(fp);
             return -1;
         }
     }
 
     if (ferror(fp)) {
-        fprintf(stderr, "[config] failed to read %s\n", path);
+        log_printf("[config] failed to read %s\n", path);
         fclose(fp);
         return -1;
     }
@@ -218,7 +219,7 @@ int clipsync_config_load_from_args(clipsync_daemon_config *cfg, int argc, char *
             i++;
         } else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
             if (parse_int_value(argv[++i], 1, 65535, &cfg->port) != 0) {
-                fprintf(stderr, "[config] invalid --port: %s\n", argv[i]);
+                log_printf("[config] invalid --port: %s\n", argv[i]);
                 return -1;
             }
         } else if (strcmp(argv[i], "--secret") == 0 && i + 1 < argc) {
