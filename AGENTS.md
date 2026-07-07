@@ -124,11 +124,12 @@ module/
 | `clip_bridge_client.c` | `@clipbridge` socket 客户端；READ/WRITE/WATCH |
 | `bridge_protocol.c` | bridge 长度前缀协议读写实现 |
 | `ws_server.c` | mongoose WebSocket 服务端；认证；广播 |
-| `mdns_publish.c` | mDNS 服务发布（mongoose） |
+| `mdns_publish.c` | mDNS 服务发布（mongoose）；启动时检测 SoftAP 接口并安装组播路由 |
 | `protocol_json.c` | WebSocket JSON 消息构造/解析 |
 | `crypto_hmac.c` | HMAC-SHA256 挑战-响应 |
 | `daemon_config.c` | TOML 配置加载 |
 | `last_clip.c` | 剪贴板去重（避免回环） |
+| `softap_detect.c` | SoftAP 接口检测与组播路由安装（手机开热点时让 mDNS 走 `wlan2` 而非移动数据） |
 
 ### 关键约定
 
@@ -272,6 +273,7 @@ adb shell "su -c 'pkill clipsyncd; /data/adb/modules/clipsyncd/system/bin/clipsy
 ### 已知风险点
 
 1. 由于手机内核限制， PC multicast 查询无法到达手机。因此目前只依靠手机 主动发包到pc实现
+2. 手机开热点时，Android 策略路由默认让 mDNS 组播包（`224.0.0.251`）走移动数据接口（`rmnet_data*`）而非 SoftAP 接口（`wlan2`/`softap0`），导致连热点的 PC 收不到 mDNS 通告。`softap_detect.c` 在 `mdns_publish_init` 时检测 SoftAP 接口并向 `local_network` 策略表添加 `224.0.0.0/24 dev <softap>` 路由以修正此问题。检测逻辑：接口名匹配 AOSP `tetherableWifiRegexs`（`wlan\d`、`softap\d`、`ap_br_wlan\d`、`ap_br_softap\d`）+ `IFF_UP` + 有 IPv4 + `/proc/net/route` 中有直连（非网关、非默认）路由。
 
 ## 通知测试
 

@@ -8,7 +8,7 @@ ANDROID_JAR ?= $(ANDROID_SDK_ROOT)\platforms\$(ANDROID_PLATFORM)\android.jar
 CFLAGS = -Wall -Wextra -O2 -Ithird_party/mongoose -DMG_ENABLE_MDNS=1
 LDFLAGS = -ldl
 TARGET = $(BUILD_DIR)/clipsyncd
-SRCS = clipsyncd.c clip_bridge_client.c bridge_protocol.c ws_server.c mdns_publish.c protocol_json.c crypto_hmac.c daemon_config.c last_clip.c device_identity.c third_party/mongoose/mongoose.c
+SRCS = clipsyncd.c clip_bridge_client.c bridge_protocol.c ws_server.c mdns_publish.c protocol_json.c crypto_hmac.c daemon_config.c last_clip.c device_identity.c softap_detect.c third_party/mongoose/mongoose.c
 OBJS = $(SRCS:%.c=$(BUILD_DIR)/%.o)
 NDK_BUILD ?= ndk-build
 ZYGISK_SO = module/zygisk/arm64-v8a.so
@@ -20,7 +20,7 @@ HELPER_DEX = module/zygisk/clipsync-helper.dex
 HELPER_SRC = zygisk/helper/src/dev/clipsync/bridge/ClipSyncBridgeHelper.java
 HELPER_STUB = zygisk/helper/stubs/android/content/IOnPrimaryClipChangedListener.java
 
-all: $(TARGET) $(BUILD_DIR)/test_bridge_client $(BUILD_DIR)/test_crypto_hmac $(BUILD_DIR)/test_protocol_json $(BUILD_DIR)/test_daemon_config $(BUILD_DIR)/test_bridge_protocol $(BUILD_DIR)/test_last_clip $(ZYGISK_SO) $(HELPER_DEX)
+all: $(TARGET) $(BUILD_DIR)/test_bridge_client $(BUILD_DIR)/test_crypto_hmac $(BUILD_DIR)/test_protocol_json $(BUILD_DIR)/test_daemon_config $(BUILD_DIR)/test_bridge_protocol $(BUILD_DIR)/test_last_clip $(BUILD_DIR)/test_softap_detect_live $(ZYGISK_SO) $(HELPER_DEX)
 
 $(BUILD_DIR):
 	@if not exist $(BUILD_DIR) mkdir $(BUILD_DIR)
@@ -79,7 +79,7 @@ package: module
 	@echo KernelSU module package ready:
 	@echo   $(PACKAGE)
 
-.PHONY: all clean install module package test-crypto test-json test-daemon-config test-bridge-protocol test-bridge-client test-last-clip
+.PHONY: all clean install module package test-crypto test-json test-daemon-config test-bridge-protocol test-bridge-client test-last-clip test-softap-detect
 
 $(BUILD_DIR)/test_bridge_client: test_bridge_client.c bridge_protocol.c bridge_protocol.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ test_bridge_client.c bridge_protocol.c
@@ -120,3 +120,10 @@ $(BUILD_DIR)/test_daemon_config: test_daemon_config.c daemon_config.c daemon_con
 
 test-daemon-config: $(BUILD_DIR)/test_daemon_config
 	$(BUILD_DIR)/test_daemon_config
+
+$(BUILD_DIR)/test_softap_detect_live: test_softap_detect_live.c softap_detect.c softap_detect.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -o $@ test_softap_detect_live.c softap_detect.c
+
+test-softap-detect: $(BUILD_DIR)/test_softap_detect_live
+	adb push $(BUILD_DIR)/test_softap_detect_live /data/local/tmp/
+	adb shell su -c "chmod 755 /data/local/tmp/test_softap_detect_live && /data/local/tmp/test_softap_detect_live"
