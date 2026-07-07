@@ -104,6 +104,14 @@ static int apply_pair(clipsync_daemon_config *cfg, const char *section, const ch
         return 0;
     }
 
+    if (strcmp(section, "connection") == 0 && strcmp(key, "mdns_announce_interval_ms") == 0) {
+        if (parse_int_value(value, 1000, 3600000, &cfg->mdns_announce_interval_ms) != 0) {
+            fprintf(stderr, "[config] invalid connection.mdns_announce_interval_ms: %s\n", value);
+            return -1;
+        }
+        return 0;
+    }
+
     if (strcmp(section, "auth") == 0 && strcmp(key, "secret") == 0) {
         return parse_string_value(value, cfg->secret, sizeof(cfg->secret));
     }
@@ -116,6 +124,7 @@ void clipsync_config_init(clipsync_daemon_config *cfg) {
     memset(cfg, 0, sizeof(*cfg));
     cfg->port = WS_PORT;
     cfg->secret[0] = '\0';
+    cfg->mdns_announce_interval_ms = 30000;
     copy_value(cfg->config_path, sizeof(cfg->config_path), CLIPSYNC_DEFAULT_CONFIG_PATH);
 }
 

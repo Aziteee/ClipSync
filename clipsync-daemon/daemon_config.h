@@ -6,6 +6,7 @@
 typedef struct {
     int port;
     char secret[256];
+    int mdns_announce_interval_ms;
     char config_path[256];
     int config_loaded;
 } clipsync_daemon_config;

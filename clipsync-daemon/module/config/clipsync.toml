@@ -1,5 +1,7 @@
 [connection]
 port = 5287
+# mDNS 通告发送间隔（毫秒，范围 1000-3600000）
+mdns_announce_interval_ms = 30000
 
 [auth]
 secret = ""

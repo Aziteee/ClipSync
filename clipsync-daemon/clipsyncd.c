@@ -17,7 +17,6 @@
 
 #define MAX_IDLE_POLL_MS 5000
 #define IDLE_POLL_MS_NO_PC 60000
-#define MDNS_ANNOUNCE_INTERVAL_MS 30000LL
 
 static volatile sig_atomic_t running = 1;
 static clipsync_last_clip g_last_clip;
@@ -193,7 +192,7 @@ int main(int argc, char *argv[]) {
     printf("[clipsyncd] running. Waiting for connections and clipboard events...\n");
     update_module_status(&cfg);
     last_pc_connected = ws_server_authenticated_count() > 0 ? 1 : 0;
-    next_mdns_announce_ms = monotonic_millis() + MDNS_ANNOUNCE_INTERVAL_MS;
+    next_mdns_announce_ms = monotonic_millis() + (long long)cfg.mdns_announce_interval_ms;
 
     /* Event loop */
     while (running) {
@@ -225,14 +224,14 @@ int main(int argc, char *argv[]) {
             update_module_status(&cfg);
             if (!pc_connected) {
                 mdns_publish_announce();
-                next_mdns_announce_ms = monotonic_millis() + MDNS_ANNOUNCE_INTERVAL_MS;
+                next_mdns_announce_ms = monotonic_millis() + (long long)cfg.mdns_announce_interval_ms;
             }
         }
 
         now_ms = monotonic_millis();
         if (!pc_connected && now_ms >= next_mdns_announce_ms) {
             mdns_publish_announce();
-            next_mdns_announce_ms = now_ms + MDNS_ANNOUNCE_INTERVAL_MS;
+            next_mdns_announce_ms = now_ms + (long long)cfg.mdns_announce_interval_ms;
         }
     }
 

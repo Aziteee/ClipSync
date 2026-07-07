@@ -40,6 +40,8 @@ ClipSync 是一个局域网剪贴板同步项目，用于在 Windows PC 和 Andr
 ```toml
 [connection]
 port = 5287
+# mDNS 通告发送间隔（毫秒，范围 1000-3600000）
+mdns_announce_interval_ms = 30000
 
 [auth]
 secret = ""
@@ -84,6 +86,7 @@ debounce_ms = 300
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
 | `connection.port` | `5287` | WebSocket 端口 |
+| `connection.mdns_announce_interval_ms` | `30000` | mDNS 通告发送间隔（毫秒，范围 1000-3600000，Android 端） |
 | `connection.host` | 自动发现 | 手动指定手机 IP（旧写法，仅限单设备） |
 | `connection.uri` | 自动发现 | 手动指定 WebSocket URI（旧写法，仅限单设备） |
 | `connection.heartbeat_interval_ms` | `5000` | 心跳发送间隔（毫秒，PC 端） |
