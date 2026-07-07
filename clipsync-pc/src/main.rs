@@ -866,9 +866,22 @@ fn main() -> anyhow::Result<()> {
 
     let cfg_clone = cfg.clone();
     let proxy_clone = proxy.clone();
-    std::thread::spawn(move || {
-        rt.block_on(run_sync_loop(cfg_clone, proxy_clone));
-    });
+    std::thread::Builder::new()
+        .name("clipsync-sync".to_string())
+        .spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                rt.block_on(run_sync_loop(cfg_clone, proxy_clone));
+            }));
+            if let Err(panic) = result {
+                if let Some(message) = panic.downcast_ref::<&str>() {
+                    log::error!("ClipSync sync thread panicked: {}", message);
+                } else if let Some(message) = panic.downcast_ref::<String>() {
+                    log::error!("ClipSync sync thread panicked: {}", message);
+                } else {
+                    log::error!("ClipSync sync thread panicked");
+                }
+            }
+        })?;
 
     let mut app = App::new(proxy, app_config, config_path, tokio_handle);
     event_loop.set_control_flow(tray_event_loop_control_flow());

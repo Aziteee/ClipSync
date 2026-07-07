@@ -56,8 +56,56 @@ fn bind_mdns_socket() -> anyhow::Result<UdpSocket> {
     socket.set_reuse_port(true)?;
     socket.bind(&SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, MDNS_PORT).into())?;
     let socket: UdpSocket = socket.into();
-    socket.join_multicast_v4(&MDNS_ADDR, &Ipv4Addr::UNSPECIFIED)?;
+    join_mdns_multicast(&socket)?;
     Ok(socket)
+}
+
+fn join_mdns_multicast(socket: &UdpSocket) -> anyhow::Result<()> {
+    let mut joined = 0usize;
+    for iface in multicast_interfaces() {
+        match socket.join_multicast_v4(&MDNS_ADDR, &iface) {
+            Ok(()) => {
+                joined += 1;
+                log::info!("Joined mDNS multicast group on {}", iface);
+            }
+            Err(e) => {
+                log::debug!("Failed to join mDNS multicast group on {}: {}", iface, e);
+            }
+        }
+    }
+
+    if joined > 0 {
+        return Ok(());
+    }
+
+    socket
+        .join_multicast_v4(&MDNS_ADDR, &Ipv4Addr::UNSPECIFIED)
+        .map_err(|e| anyhow::anyhow!("failed to join mDNS multicast group: {e}"))
+}
+
+fn multicast_interfaces() -> Vec<Ipv4Addr> {
+    let mut addrs = local_ip_address::list_afinet_netifas()
+        .map(|interfaces| {
+            interfaces
+                .into_iter()
+                .filter_map(|(_, addr)| match addr {
+                    IpAddr::V4(addr) if usable_multicast_interface(addr) => Some(addr),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    addrs.sort_unstable();
+    addrs.dedup();
+    addrs
+}
+
+fn usable_multicast_interface(addr: Ipv4Addr) -> bool {
+    !addr.is_unspecified()
+        && !addr.is_loopback()
+        && !addr.is_link_local()
+        && !addr.is_broadcast()
+        && !addr.is_multicast()
 }
 
 fn instance_name(fullname: &str) -> &str {
@@ -200,6 +248,17 @@ mod tests {
             endpoints[0].service_name,
             "ClipSync-Android-f2d65699._clipsync._tcp.local."
         );
+    }
+
+    #[test]
+    fn multicast_interface_filter_skips_non_routable_addresses() {
+        assert!(usable_multicast_interface(Ipv4Addr::new(10, 33, 174, 120)));
+        assert!(usable_multicast_interface(Ipv4Addr::new(192, 168, 1, 50)));
+        assert!(!usable_multicast_interface(Ipv4Addr::UNSPECIFIED));
+        assert!(!usable_multicast_interface(Ipv4Addr::LOCALHOST));
+        assert!(!usable_multicast_interface(Ipv4Addr::new(169, 254, 1, 2)));
+        assert!(!usable_multicast_interface(Ipv4Addr::new(224, 0, 0, 1)));
+        assert!(!usable_multicast_interface(Ipv4Addr::BROADCAST));
     }
 
     fn sample_announcement_packet() -> Vec<u8> {
