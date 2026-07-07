@@ -245,17 +245,6 @@ void ws_server_poll(int timeout_ms) {
     }
 }
 
-void ws_server_cleanup(void) {
-    if (!g_initialized) return;
-    mg_mgr_free(&g_mgr);
-    g_listener = NULL;
-    g_wakeup_enabled = 0;
-    memset(g_clients, 0, sizeof(g_clients));
-    memset(g_secret, 0, sizeof(g_secret));
-    g_on_set = NULL;
-    g_initialized = 0;
-}
-
 void ws_server_broadcast(const char *json) {
     if (!g_initialized || !json) return;
     size_t len = strlen(json);

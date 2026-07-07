@@ -16,8 +16,6 @@ static struct mg_dnssd_record g_record;
 static struct mg_connection *g_mdns = NULL;
 static int g_port = 0;
 static struct softap_iface g_softap;
-static int g_softap_detected = 0;
-
 static int txt_add(const char *entry) {
     size_t len = entry ? strlen(entry) : 0;
     if (len == 0 || len > 255 || g_txt_len + 1 + len > sizeof(g_txt_raw)) return -1;
@@ -76,7 +74,6 @@ int mdns_publish_init(struct mg_mgr *mgr, int port, const char *instance_name) {
      * the mobile-data interface. See softap_detect.h for details. */
     memset(&g_softap, 0, sizeof(g_softap));
     if (softap_detect(&g_softap, NULL) == 0) {
-        g_softap_detected = 1;
         char ip_str[INET_ADDRSTRLEN] = {0};
         struct in_addr a;
         a.s_addr = g_softap.ipv4;

@@ -5,7 +5,7 @@ ANDROID_PLATFORM ?= android-36
 ANDROID_BUILD_TOOLS ?= 36.1.0
 D8 ?= $(ANDROID_SDK_ROOT)\build-tools\$(ANDROID_BUILD_TOOLS)\d8.bat
 ANDROID_JAR ?= $(ANDROID_SDK_ROOT)\platforms\$(ANDROID_PLATFORM)\android.jar
-CFLAGS = -Wall -Wextra -O2 -Ithird_party/mongoose -DMG_ENABLE_MDNS=1
+CFLAGS = -Wall -Wextra -O2 -I. -Ithird_party/mongoose -DMG_ENABLE_MDNS=1
 LDFLAGS = -ldl
 TARGET = $(BUILD_DIR)/clipsyncd
 SRCS = clipsyncd.c clip_bridge_client.c bridge_protocol.c ws_server.c mdns_publish.c protocol_json.c crypto_hmac.c daemon_config.c last_clip.c device_identity.c softap_detect.c third_party/mongoose/mongoose.c
@@ -20,7 +20,7 @@ HELPER_DEX = module/zygisk/clipsync-helper.dex
 HELPER_SRC = zygisk/helper/src/dev/clipsync/bridge/ClipSyncBridgeHelper.java
 HELPER_STUB = zygisk/helper/stubs/android/content/IOnPrimaryClipChangedListener.java
 
-all: $(TARGET) $(BUILD_DIR)/test_bridge_client $(BUILD_DIR)/test_crypto_hmac $(BUILD_DIR)/test_protocol_json $(BUILD_DIR)/test_daemon_config $(BUILD_DIR)/test_bridge_protocol $(BUILD_DIR)/test_last_clip $(BUILD_DIR)/test_softap_detect_live $(ZYGISK_SO) $(HELPER_DEX)
+all: $(TARGET) $(BUILD_DIR)/tests/test_bridge_client $(BUILD_DIR)/tests/test_crypto_hmac $(BUILD_DIR)/tests/test_protocol_json $(BUILD_DIR)/tests/test_daemon_config $(BUILD_DIR)/tests/test_bridge_protocol $(BUILD_DIR)/tests/test_last_clip $(BUILD_DIR)/tests/test_softap_detect_live $(ZYGISK_SO) $(HELPER_DEX)
 
 $(BUILD_DIR):
 	@if not exist $(BUILD_DIR) mkdir $(BUILD_DIR)
@@ -81,49 +81,56 @@ package: module
 
 .PHONY: all clean install module package test-crypto test-json test-daemon-config test-bridge-protocol test-bridge-client test-last-clip test-softap-detect
 
-$(BUILD_DIR)/test_bridge_client: test_bridge_client.c bridge_protocol.c bridge_protocol.h | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ test_bridge_client.c bridge_protocol.c
+$(BUILD_DIR)/tests/test_bridge_client: tests/test_bridge_client.c bridge_protocol.c bridge_protocol.h | $(BUILD_DIR)
+	@if not exist $(BUILD_DIR)\tests mkdir $(BUILD_DIR)\tests
+	$(CC) $(CFLAGS) -o $@ tests/test_bridge_client.c bridge_protocol.c
 
-test-bridge-client: $(BUILD_DIR)/test_bridge_client
-	adb push $(BUILD_DIR)/test_bridge_client /data/local/tmp/
+test-bridge-client: $(BUILD_DIR)/tests/test_bridge_client
+	adb push $(BUILD_DIR)/tests/test_bridge_client /data/local/tmp/
 	adb shell su -c "chmod 755 /data/local/tmp/test_bridge_client && /data/local/tmp/test_bridge_client read"
 
-$(BUILD_DIR)/test_crypto_hmac: test_crypto_hmac.c crypto_hmac.c crypto_hmac.h | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ test_crypto_hmac.c crypto_hmac.c
+$(BUILD_DIR)/tests/test_crypto_hmac: tests/test_crypto_hmac.c crypto_hmac.c crypto_hmac.h | $(BUILD_DIR)
+	@if not exist $(BUILD_DIR)\tests mkdir $(BUILD_DIR)\tests
+	$(CC) $(CFLAGS) -o $@ tests/test_crypto_hmac.c crypto_hmac.c
 
-test-crypto: $(BUILD_DIR)/test_crypto_hmac
-	adb push $(BUILD_DIR)/test_crypto_hmac /data/local/tmp/
+test-crypto: $(BUILD_DIR)/tests/test_crypto_hmac
+	adb push $(BUILD_DIR)/tests/test_crypto_hmac /data/local/tmp/
 	adb shell su -c "chmod 755 /data/local/tmp/test_crypto_hmac && /data/local/tmp/test_crypto_hmac"
 
-$(BUILD_DIR)/test_protocol_json: test_protocol_json.c protocol_json.c protocol_json.h third_party/mongoose/mongoose.c | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ test_protocol_json.c protocol_json.c third_party/mongoose/mongoose.c
+$(BUILD_DIR)/tests/test_protocol_json: tests/test_protocol_json.c protocol_json.c protocol_json.h third_party/mongoose/mongoose.c | $(BUILD_DIR)
+	@if not exist $(BUILD_DIR)\tests mkdir $(BUILD_DIR)\tests
+	$(CC) $(CFLAGS) -o $@ tests/test_protocol_json.c protocol_json.c third_party/mongoose/mongoose.c
 
-test-json: $(BUILD_DIR)/test_protocol_json
-	adb push $(BUILD_DIR)/test_protocol_json /data/local/tmp/
+test-json: $(BUILD_DIR)/tests/test_protocol_json
+	adb push $(BUILD_DIR)/tests/test_protocol_json /data/local/tmp/
 	adb shell su -c "chmod 755 /data/local/tmp/test_protocol_json && /data/local/tmp/test_protocol_json"
 
-$(BUILD_DIR)/test_bridge_protocol: test_bridge_protocol.c bridge_protocol.c bridge_protocol.h | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ test_bridge_protocol.c bridge_protocol.c
+$(BUILD_DIR)/tests/test_bridge_protocol: tests/test_bridge_protocol.c bridge_protocol.c bridge_protocol.h | $(BUILD_DIR)
+	@if not exist $(BUILD_DIR)\tests mkdir $(BUILD_DIR)\tests
+	$(CC) $(CFLAGS) -o $@ tests/test_bridge_protocol.c bridge_protocol.c
 
-test-bridge-protocol: $(BUILD_DIR)/test_bridge_protocol
-	adb push $(BUILD_DIR)/test_bridge_protocol /data/local/tmp/
+test-bridge-protocol: $(BUILD_DIR)/tests/test_bridge_protocol
+	adb push $(BUILD_DIR)/tests/test_bridge_protocol /data/local/tmp/
 	adb shell su -c "chmod 755 /data/local/tmp/test_bridge_protocol && /data/local/tmp/test_bridge_protocol"
 
-$(BUILD_DIR)/test_last_clip: test_last_clip.c last_clip.c last_clip.h | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ test_last_clip.c last_clip.c
+$(BUILD_DIR)/tests/test_last_clip: tests/test_last_clip.c last_clip.c last_clip.h | $(BUILD_DIR)
+	@if not exist $(BUILD_DIR)\tests mkdir $(BUILD_DIR)\tests
+	$(CC) $(CFLAGS) -o $@ tests/test_last_clip.c last_clip.c
 
-test-last-clip: $(BUILD_DIR)/test_last_clip
-	$(BUILD_DIR)/test_last_clip
+test-last-clip: $(BUILD_DIR)/tests/test_last_clip
+	$(BUILD_DIR)/tests/test_last_clip
 
-$(BUILD_DIR)/test_daemon_config: test_daemon_config.c daemon_config.c daemon_config.h protocol.h | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ test_daemon_config.c daemon_config.c
+$(BUILD_DIR)/tests/test_daemon_config: tests/test_daemon_config.c daemon_config.c daemon_config.h protocol.h | $(BUILD_DIR)
+	@if not exist $(BUILD_DIR)\tests mkdir $(BUILD_DIR)\tests
+	$(CC) $(CFLAGS) -o $@ tests/test_daemon_config.c daemon_config.c
 
-test-daemon-config: $(BUILD_DIR)/test_daemon_config
-	$(BUILD_DIR)/test_daemon_config
+test-daemon-config: $(BUILD_DIR)/tests/test_daemon_config
+	$(BUILD_DIR)/tests/test_daemon_config
 
-$(BUILD_DIR)/test_softap_detect_live: test_softap_detect_live.c softap_detect.c softap_detect.h | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -o $@ test_softap_detect_live.c softap_detect.c
+$(BUILD_DIR)/tests/test_softap_detect_live: tests/test_softap_detect_live.c softap_detect.c softap_detect.h | $(BUILD_DIR)
+	@if not exist $(BUILD_DIR)\tests mkdir $(BUILD_DIR)\tests
+	$(CC) $(CFLAGS) -o $@ tests/test_softap_detect_live.c softap_detect.c
 
-test-softap-detect: $(BUILD_DIR)/test_softap_detect_live
-	adb push $(BUILD_DIR)/test_softap_detect_live /data/local/tmp/
+test-softap-detect: $(BUILD_DIR)/tests/test_softap_detect_live
+	adb push $(BUILD_DIR)/tests/test_softap_detect_live /data/local/tmp/
 	adb shell su -c "chmod 755 /data/local/tmp/test_softap_detect_live && /data/local/tmp/test_softap_detect_live"
