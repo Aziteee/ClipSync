@@ -1,6 +1,6 @@
 id=clipsyncd
 name=ClipSync Daemon
-version=v1.4.1
+version=v1.4.2
 versionCode=6
 author=Aziteee
 description=ClipSync clipboard sync daemon with Zygisk bridge
