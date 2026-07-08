@@ -18,15 +18,18 @@ sha2 = "0.10"
 hex = "0.4"
 url = "2"
 windows = { version = "0.58", features = [
-    "Win32_System_DataExchange",
-    "Win32_System_LibraryLoader",
-    "Win32_System_Ole",
-    "Win32_UI_WindowsAndMessaging",
-    "Win32_System_Threading",
-    "Win32_Foundation",
-    "Win32_System_Memory",
-    "Win32_Graphics_Gdi",
-    "Win32_System_Registry",
+     "Win32_System_DataExchange",
+     "Win32_System_LibraryLoader",
+     "Win32_System_Ole",
+     "Win32_UI_WindowsAndMessaging",
+     "Win32_System_Threading",
+     "Win32_Foundation",
+     "Win32_System_Memory",
+     "Win32_Graphics_Gdi",
+     "Win32_System_Registry",
+     "Win32_NetworkManagement_IpHelper",
+     "Win32_NetworkManagement_Ndis",
+     "Win32_Networking_WinSock",
 ]}
 reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
 webbrowser = "1"

@@ -30,6 +30,7 @@ pub enum DeviceSummaryState {
 pub enum TrayAction {
     ToggleStartWithWindows,
     CheckForUpdates,
+    ScanNow,
     Quit,
 }
 
@@ -85,6 +86,8 @@ impl Tray {
         let autostart_item =
             CheckMenuItem::new("Start with Windows", true, start_with_windows, None);
         let separator = PredefinedMenuItem::separator();
+        let scan_item = MenuItem::new("Scan LAN Now", true, None);
+        let separator2 = PredefinedMenuItem::separator();
         let update_item = MenuItem::new("Check for Updates", true, None);
         let quit_item = MenuItem::new("Quit", true, None);
 
@@ -92,6 +95,8 @@ impl Tray {
         menu.append(&device_separator)?;
         menu.append(&autostart_item)?;
         menu.append(&separator)?;
+        menu.append(&scan_item)?;
+        menu.append(&separator2)?;
         menu.append(&update_item)?;
         menu.append(&quit_item)?;
 
@@ -103,6 +108,7 @@ impl Tray {
             .build()?;
 
         let autostart_id = autostart_item.id().clone();
+        let scan_id = scan_item.id().clone();
         let update_id = update_item.id().clone();
         let quit_id = quit_item.id().clone();
 
@@ -110,6 +116,8 @@ impl Tray {
             if let Ok(event) = MenuEvent::receiver().recv() {
                 let action = if event.id == autostart_id {
                     Some(TrayAction::ToggleStartWithWindows)
+                } else if event.id == scan_id {
+                    Some(TrayAction::ScanNow)
                 } else if event.id == update_id {
                     Some(TrayAction::CheckForUpdates)
                 } else if event.id == quit_id {

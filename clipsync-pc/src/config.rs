@@ -33,6 +33,8 @@ pub struct ConnectionConfig {
     pub heartbeat_interval_ms: u64,
     #[serde(default = "default_heartbeat_timeout_ms")]
     pub heartbeat_timeout_ms: u64,
+    #[serde(default = "default_lan_scan_interval")]
+    pub lan_scan_interval: i64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -66,6 +68,9 @@ fn default_heartbeat_interval_ms() -> u64 {
 fn default_heartbeat_timeout_ms() -> u64 {
     30_000
 }
+fn default_lan_scan_interval() -> i64 {
+    0
+}
 fn default_debounce_ms() -> u64 {
     300
 }
@@ -81,6 +86,7 @@ impl Default for ConnectionConfig {
             uri: None,
             heartbeat_interval_ms: default_heartbeat_interval_ms(),
             heartbeat_timeout_ms: default_heartbeat_timeout_ms(),
+            lan_scan_interval: default_lan_scan_interval(),
         }
     }
 }
@@ -149,6 +155,7 @@ mod tests {
         assert_eq!(cfg.clipboard.debounce_ms, 300);
         assert_eq!(cfg.connection.heartbeat_interval_ms, 10_000);
         assert_eq!(cfg.connection.heartbeat_timeout_ms, 30_000);
+        assert_eq!(cfg.connection.lan_scan_interval, 0);
         assert!(cfg.auth.secret.is_empty());
         assert!(!cfg.general.start_with_windows);
     }
@@ -240,5 +247,39 @@ uri = "ws://10.0.0.5:5287/ws"
             cfg.connection.direct_ws_uri().as_deref(),
             Some("ws://10.0.0.5:5287/ws")
         );
+    }
+
+    #[test]
+    fn test_lan_scan_interval_parses_special_values() {
+        let toml_str = r#"
+[connection]
+lan_scan_interval = -1
+"#;
+        let cfg: ClipSyncConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.connection.lan_scan_interval, -1);
+
+        let toml_str = r#"
+[connection]
+lan_scan_interval = 0
+"#;
+        let cfg: ClipSyncConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.connection.lan_scan_interval, 0);
+
+        let toml_str = r#"
+[connection]
+lan_scan_interval = 600
+"#;
+        let cfg: ClipSyncConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.connection.lan_scan_interval, 600);
+    }
+
+    #[test]
+    fn test_lan_scan_interval_defaults_when_absent() {
+        let toml_str = r#"
+[auth]
+secret = "only-secret"
+"#;
+        let cfg: ClipSyncConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.connection.lan_scan_interval, 0);
     }
 }

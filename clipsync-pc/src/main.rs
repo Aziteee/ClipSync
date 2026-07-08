@@ -2,6 +2,7 @@
 
 mod clip;
 mod config;
+mod lan_scan;
 mod mdns;
 mod protocol;
 mod startup;
@@ -109,6 +110,7 @@ struct App {
     config: config::ClipSyncConfig,
     config_path: std::path::PathBuf,
     tokio_handle: tokio::runtime::Handle,
+    scan_trigger_tx: Option<mpsc::UnboundedSender<()>>,
 }
 
 impl App {
@@ -124,6 +126,7 @@ impl App {
             config,
             config_path,
             tokio_handle,
+            scan_trigger_tx: None,
         }
     }
 }
@@ -200,6 +203,13 @@ impl App {
                     }
                 }
             });
+            return;
+        }
+        if matches!(action, TrayAction::ScanNow) {
+            if let Some(tx) = &self.scan_trigger_tx {
+                let _ = tx.send(());
+                log::info!("Manual LAN scan triggered");
+            }
             return;
         }
     }
@@ -677,7 +687,11 @@ fn resolve_config_path() -> PathBuf {
     config_path_for(exe_path.as_deref(), cwd.as_deref())
 }
 
-async fn run_sync_loop(cfg: Arc<config::ClipSyncConfig>, proxy: EventLoopProxy<UiEvent>) {
+async fn run_sync_loop(
+    cfg: Arc<config::ClipSyncConfig>,
+    proxy: EventLoopProxy<UiEvent>,
+    mut scan_trigger_rx: mpsc::UnboundedReceiver<()>,
+) {
     let (clip_tx, mut clip_rx) = mpsc::unbounded_channel::<String>();
     let listener = clip::ClipListener::new(clip_tx);
     listener.spawn();
@@ -704,6 +718,38 @@ async fn run_sync_loop(cfg: Arc<config::ClipSyncConfig>, proxy: EventLoopProxy<U
             .as_mut()
             .reset(Instant::now() + Duration::from_secs(5));
     }
+
+    let lan_scan_interval = cfg.connection.lan_scan_interval;
+    let lan_scan_enabled = lan_scan_interval >= 0;
+    let (lan_scan_tx, mut lan_scan_rx) =
+        mpsc::unbounded_channel::<Vec<mdns::DiscoveredEndpoint>>();
+    let mut lan_scan_sleep: Pin<Box<Sleep>> = Box::pin(tokio::time::sleep(Duration::MAX));
+    let mut lan_scan_in_flight = false;
+    if auto_discovery && lan_scan_enabled {
+        log::info!(
+            "LAN scan enabled; interval={}s (0=once, -1=disabled)",
+            lan_scan_interval
+        );
+        lan_scan_sleep.as_mut().reset(Instant::now());
+    }
+
+    let launch_lan_scan = |lan_scan_tx: &mpsc::UnboundedSender<Vec<mdns::DiscoveredEndpoint>>,
+                           cfg: &Arc<config::ClipSyncConfig>| {
+        let port = cfg.connection.port;
+        let secret = cfg.auth.secret.clone();
+        let hs_timeout = handshake_timeout(cfg);
+        let lan_scan_tx = lan_scan_tx.clone();
+        tokio::spawn(async move {
+            log::info!("LAN scan starting...");
+            let endpoints = lan_scan::scan_lan(port, &secret, hs_timeout).await;
+            if !endpoints.is_empty() {
+                log::info!("LAN scan found {} device(s)", endpoints.len());
+            } else {
+                log::info!("LAN scan found no devices");
+            }
+            let _ = lan_scan_tx.send(endpoints);
+        });
+    };
 
     for target in static_targets {
         register_device(
@@ -750,6 +796,41 @@ async fn run_sync_loop(cfg: Arc<config::ClipSyncConfig>, proxy: EventLoopProxy<U
                     discovery_retry_sleep
                         .as_mut()
                         .reset(Instant::now() + Duration::from_secs(5));
+                }
+            }
+            _ = &mut lan_scan_sleep, if auto_discovery && lan_scan_enabled && !lan_scan_in_flight => {
+                lan_scan_in_flight = true;
+                launch_lan_scan(&lan_scan_tx, &cfg);
+                if lan_scan_interval > 0 {
+                    lan_scan_sleep
+                        .as_mut()
+                        .reset(Instant::now() + Duration::from_secs(lan_scan_interval as u64));
+                } else {
+                    lan_scan_sleep.as_mut().reset(Instant::now() + Duration::from_secs(365 * 86400));
+                }
+            }
+            Some(()) = scan_trigger_rx.recv(), if auto_discovery && !lan_scan_in_flight => {
+                lan_scan_in_flight = true;
+                launch_lan_scan(&lan_scan_tx, &cfg);
+            }
+            Some(endpoints) = lan_scan_rx.recv(), if auto_discovery && lan_scan_in_flight => {
+                lan_scan_in_flight = false;
+                let mut new_any = false;
+                for endpoint in endpoints {
+                    let target = target_from_discovered(endpoint);
+                    if register_device(
+                        target,
+                        &mut handles,
+                        cfg.clone(),
+                        device_event_tx.clone(),
+                        &mut engine,
+                        latest_text.as_deref(),
+                    ) {
+                        new_any = true;
+                    }
+                }
+                if new_any {
+                    send_aggregate_state(&proxy, &handles);
                 }
             }
             Some(text) = clip_rx.recv() => {
@@ -864,13 +945,16 @@ fn main() -> anyhow::Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     let tokio_handle = rt.handle().clone();
 
+    let (scan_trigger_tx, scan_trigger_rx) = mpsc::unbounded_channel::<()>();
+
     let cfg_clone = cfg.clone();
     let proxy_clone = proxy.clone();
+    let scan_trigger_rx = scan_trigger_rx;
     std::thread::Builder::new()
         .name("clipsync-sync".to_string())
         .spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                rt.block_on(run_sync_loop(cfg_clone, proxy_clone));
+                rt.block_on(run_sync_loop(cfg_clone, proxy_clone, scan_trigger_rx));
             }));
             if let Err(panic) = result {
                 if let Some(message) = panic.downcast_ref::<&str>() {
@@ -884,6 +968,7 @@ fn main() -> anyhow::Result<()> {
         })?;
 
     let mut app = App::new(proxy, app_config, config_path, tokio_handle);
+    app.scan_trigger_tx = Some(scan_trigger_tx);
     event_loop.set_control_flow(tray_event_loop_control_flow());
     event_loop.run_app(&mut app)?;
 
