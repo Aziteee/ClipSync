@@ -1,5 +1,7 @@
 # ClipSync
 
+[English](README.en.md)
+
 ClipSync 是一个局域网剪贴板同步项目，用于在 Windows PC 和 Android 设备之间同步文本剪贴板。设计理念是尽量做到轻量、易用、低能耗。
 
 ## 功能
