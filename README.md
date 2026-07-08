@@ -1,15 +1,13 @@
 # ClipSync
 
-ClipSync 是一个局域网剪贴板同步项目，用于在 Windows PC 和 Android 设备之间同步文本剪贴板。
+ClipSync 是一个局域网剪贴板同步项目，用于在 Windows PC 和 Android 设备之间同步文本剪贴板。设计理念是尽量做到轻量、易用、低能耗。
 
 ## 功能
 
 - PC 与多台 Android 设备双向同步文本剪贴板
-- 预共享密钥认证
 - mDNS 自动发现 + LAN 主动扫描，无感连接
-- 托盘菜单支持手动扫描局域网设备
 - Windows 托盘状态显示
-- 轻量，对性能无影响
+- 预共享密钥认证
 
 ## 快速开始
 
@@ -32,75 +30,86 @@ ClipSync 是一个局域网剪贴板同步项目，用于在 Windows PC 和 Andr
 
 ## 配置
 
-以下为默认配置，**开箱即用**。如需自定义，可创建配置文件。
+默认配置**开箱即用**，无需任何配置即可使用。以下配置项仅在需要自定义时修改。
 
-### Android
+> PC 与 Android 的 `port` 和 `secret` 必须一致，否则无法连接。
 
-配置文件路径：`/data/adb/clipsyncd/clipsync.toml`
+### Android 端
+
+配置文件：`/data/adb/clipsyncd/clipsync.toml`
 
 ```toml
 [connection]
-port = 5287
-# mDNS 通告发送间隔（毫秒，范围 1000-3600000）
-mdns_announce_interval_ms = 30000
+port = 5287                          # WebSocket 端口
+mdns_announce_interval_ms = 30000    # mDNS 通告间隔（毫秒，范围 1000-3600000）
 
 [auth]
-secret = ""
-
-[clipboard]
-debounce_ms = 300
+secret = ""                          # 预共享密钥，为空则不校验
 ```
 
-修改后在 Root 管理器中点击模块的 Action 按钮重启服务即可生效，无需重启。
+修改后在 Root 管理器中点击模块的 Action 按钮重启服务即可生效，无需重启手机。
 
-### PC
+### PC 端
 
-配置文件路径：与 `clipsync-pc.exe` 同目录的 `clipsync.toml`
+配置文件：与 `clipsync-pc.exe` 同目录的 `clipsync.toml`
 
 ```toml
 [connection]
-port = 5287
+port = 5287                          # WebSocket 端口（须与 Android 端一致）
+heartbeat_interval_ms = 10000        # 心跳发送间隔（毫秒）
+heartbeat_timeout_ms = 30000         # 心跳超时时间（毫秒）
+lan_scan_interval = 0                # LAN 扫描：0=仅启动时一次，-1=关闭，N=每 N 秒周期扫描
 
-# 若 mDNS 自动发现不可用，手动指定设备（可选）
+[auth]
+secret = ""                          # 预共享密钥（须与 Android 端一致）
+
+[clipboard]
+debounce_ms = 300                    # 剪贴板变化去抖间隔（毫秒）
+
+[general]
+start_with_windows = false           # 开机自启
+
+# 手动指定设备列表（可选）。配置后跳过 mDNS 与 LAN 扫描，仅连接列表中 enabled = true 的设备
 # [[devices]]
 # name = "手机"
 # uri = "ws://192.168.0.10:5287/ws"
+# enabled = true
 #
 # [[devices]]
 # name = "平板"
 # uri = "ws://192.168.0.11:5287/ws"
 # enabled = false
-
-# LAN 主动扫描（默认启动时扫一次，可配置周期或关闭）
-# lan_scan_interval = 0    # 0=仅启动时扫一次，-1=关闭，N=每N秒扫一次
-
-[auth]
-secret = ""
-
-[clipboard]
-debounce_ms = 300
 ```
 
-修改后重启 `clipsync-pc.exe`。
+修改后重启 `clipsync-pc.exe` 生效。
 
-> PC 与 Android 的 `port` 和 `secret` 必须一致。
+### 配置项参考
 
-### 配置项说明
+**通用**
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
-| `connection.port` | `5287` | WebSocket 端口 |
-| `connection.mdns_announce_interval_ms` | `30000` | mDNS 通告发送间隔（毫秒，范围 1000-3600000，Android 端） |
-| `connection.host` | 自动发现 | 手动指定手机 IP（旧写法，仅限单设备） |
-| `connection.uri` | 自动发现 | 手动指定 WebSocket URI（旧写法，仅限单设备） |
-| `connection.heartbeat_interval_ms` | `5000` | 心跳发送间隔（毫秒，PC 端） |
-| `connection.heartbeat_timeout_ms` | `15000` | 心跳超时时间（毫秒，PC 端） |
-| `connection.lan_scan_interval` | `0` | LAN 扫描间隔（秒，PC 端；`0`=仅启动时一次，`-1`=关闭，正数=周期扫描） |
-| `auth.secret` | `""` | 预共享密钥，为空则不校验 |
-| `clipboard.debounce_ms` | `300` | 去抖间隔（毫秒） |
-| `devices[].name` | 无 | 设备显示名称（可选，PC 端） |
-| `devices[].uri` | 无 | 设备 WebSocket 地址（PC 端） |
-| `devices[].enabled` | `true` | 是否启用该设备（PC 端） |
+| `connection.port` | `5287` | WebSocket 端口，两端必须一致 |
+| `auth.secret` | `""` | 预共享密钥，两端必须一致；为空则不校验 |
+| `clipboard.debounce_ms` | `300` | 剪贴板变化去抖间隔（毫秒） |
+
+**仅 Android 端**
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `connection.mdns_announce_interval_ms` | `30000` | mDNS 通告间隔（毫秒，范围 1000-3600000） |
+
+**仅 PC 端**
+
+| 字段 | 默认值 | 说明 |
+|------|--------|------|
+| `connection.heartbeat_interval_ms` | `10000` | WS心跳发送间隔（毫秒） |
+| `connection.heartbeat_timeout_ms` | `30000` | WS心跳超时时间（毫秒） |
+| `connection.lan_scan_interval` | `0` | LAN 扫描：`0`=仅启动时一次，`-1`=关闭，正数=每 N 秒周期扫描 |
+| `general.start_with_windows` | `false` | 开机自启 |
+| `devices[].name` | 无 | 手动设备显示名（可选） |
+| `devices[].uri` | 无 | 手动设备 WebSocket 地址 |
+| `devices[].enabled` | `true` | 是否启用该设备 |
 
 ## 开发
 
@@ -142,4 +151,4 @@ make package
 ## 注意
 
 - 理论支持 Windows 10/11 以及 Android 10+ 系统。
-- 配置 `[[devices]]` 后，PC 将跳过 mDNS 与 LAN scan 自动发现，仅连接列表中启用（`enabled = true`）的设备。
+- 
