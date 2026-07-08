@@ -8,7 +8,7 @@ ClipSync 是一个局域网剪贴板同步项目，在 Windows PC 与多台 Andr
 
 | 组件 | 目录 | 语言 | 运行位置 | 职责 |
 |------|------|------|----------|------|
-| `clipsync-pc` | `clipsync-pc/` | Rust | Windows | 托盘客户端；监听/写入 Windows 剪贴板；WebSocket 客户端连接各 Android 设备；mDNS 自动发现 |
+| `clipsync-pc` | `clipsync-pc/` | Rust | Windows | 托盘客户端；监听/写入 Windows 剪贴板；WebSocket 客户端连接各 Android 设备；mDNS 自动发现 + LAN 主动扫描 |
 | `clipsyncd` | `clipsync-daemon/*.c` | C | Android (root) | 守护进程；WebSocket 服务端；mDNS 发布；通过 `@clipbridge` socket 读写 Android 剪贴板 |
 | Zygisk bridge | `clipsync-daemon/zygisk/jni/main.cpp` | C++ | Android `system_server` 内 | 注入 `system_server`，通过 JNI 调用 `ClipboardService`，暴露 `@clipbridge` abstract Unix socket |
 | Java helper | `clipsync-daemon/zygisk/helper/` | Java | `system_server` 内（dex 注入） | 注册 `IOnPrimaryClipChangedListener` 直接监听剪贴板变化，回调 native |
@@ -71,9 +71,9 @@ clipsyncd -> @clipbridge abstract Unix socket -> Zygisk bridge in system_server 
 
 ### 设备发现与连接
 
-- **mDNS**：服务类型 `_clipsync._tcp`，端口 `5287`。Android 端 `mdns_publish.c` 通过 mongoose 发布；PC 端 `mdns.rs` 用 `mdns-sd` crate 浏览。
-- **LAN unicast fallback**：`clipsync-pc/clipsync.toml` 不配置 `host`/`uri` 时，PC 探测同 `/24` 地址，要求 ClipSync WebSocket `hello` 应答以过滤其他开放 `5287` 的服务。
-- **手动配置**：`[[devices]]` 列表存在时跳过 mDNS，仅连接 `enabled = true` 的设备。
+- **mDNS**：服务类型 `_clipsync._tcp`，端口 `5287`。Android 端 `mdns_publish.c` 通过 mongoose 发布；PC 端 `mdns.rs` 被动监听组播通告（`224.0.0.251:5353`）。
+- **LAN scan**：PC 端 `lan_scan.rs` 主动扫描本机物理网口（Windows 通过 `GetIfTable2` 查询 ifType，仅选以太网/WiFi）的 `/24` 网段，对每个候选 IP:5287 尝试完整 WebSocket HMAC 握手，成功即认定为 ClipSync 设备。与 mDNS 共存互补，去重复用 URI 哈希。默认仅启动时扫一次（`lan_scan_interval = 0`），可配置周期扫描或关闭（`-1`）。托盘菜单"Scan LAN Now"支持手动触发。
+- **手动配置**：`[[devices]]` 列表存在时跳过 mDNS 与 LAN scan，仅连接 `enabled = true` 的设备。
 - PC 是 WebSocket **客户端**，Android `clipsyncd` 是 WebSocket **服务端**。
 
 ### 认证
@@ -110,7 +110,8 @@ module/
 | `ws.rs` | WebSocket 连接与 HMAC 认证 |
 | `protocol.rs` | `ClipMessage` 枚举与 JSON 序列化 |
 | `sync.rs` | `SyncEngine`：blake3 去重；pending 队列 |
-| `mdns.rs` | mDNS 服务发现 |
+| `mdns.rs` | mDNS 服务发现（被动监听组播通告） |
+| `lan_scan.rs` | LAN 主动扫描（`GetIfTable2` 选物理网口 + `/24` 探测 + 完整握手） |
 | `tray.rs` | 系统托盘图标与菜单 |
 | `config.rs` | TOML 配置解析 |
 | `startup.rs` | 开机自启（注册表） |

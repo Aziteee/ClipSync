@@ -6,7 +6,8 @@ ClipSync 是一个局域网剪贴板同步项目，用于在 Windows PC 和 Andr
 
 - PC 与多台 Android 设备双向同步文本剪贴板
 - 预共享密钥认证
-- mDNS 自动发现，无感连接
+- mDNS 自动发现 + LAN 主动扫描，无感连接
+- 托盘菜单支持手动扫描局域网设备
 - Windows 托盘状态显示
 - 轻量，对性能无影响
 
@@ -70,6 +71,9 @@ port = 5287
 # uri = "ws://192.168.0.11:5287/ws"
 # enabled = false
 
+# LAN 主动扫描（默认启动时扫一次，可配置周期或关闭）
+# lan_scan_interval = 0    # 0=仅启动时扫一次，-1=关闭，N=每N秒扫一次
+
 [auth]
 secret = ""
 
@@ -91,6 +95,7 @@ debounce_ms = 300
 | `connection.uri` | 自动发现 | 手动指定 WebSocket URI（旧写法，仅限单设备） |
 | `connection.heartbeat_interval_ms` | `5000` | 心跳发送间隔（毫秒，PC 端） |
 | `connection.heartbeat_timeout_ms` | `15000` | 心跳超时时间（毫秒，PC 端） |
+| `connection.lan_scan_interval` | `0` | LAN 扫描间隔（秒，PC 端；`0`=仅启动时一次，`-1`=关闭，正数=周期扫描） |
 | `auth.secret` | `""` | 预共享密钥，为空则不校验 |
 | `clipboard.debounce_ms` | `300` | 去抖间隔（毫秒） |
 | `devices[].name` | 无 | 设备显示名称（可选，PC 端） |
@@ -137,4 +142,4 @@ make package
 ## 注意
 
 - 理论支持 Windows 10/11 以及 Android 10+ 系统。
-- 配置 `[[devices]]` 后，PC 将跳过 mDNS 自动发现，仅连接列表中启用（`enabled = true`）的设备。
+- 配置 `[[devices]]` 后，PC 将跳过 mDNS 与 LAN scan 自动发现，仅连接列表中启用（`enabled = true`）的设备。
